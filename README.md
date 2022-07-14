@@ -12,6 +12,8 @@ ECL anneks   000768 05536B SN 118693
 
 
 #protocol tech
+ParameterList.cs HRC.Driver contains all parameters, m_map is populated while constructing
+
 Devices.cs 1529
             // read and set outdoor temp + T2 -> T4
             ReadParameterAndUpdateDataPoint(m_params.GetParameter<short>(1, 820), m_sysStatus.OutdoorTemperature);

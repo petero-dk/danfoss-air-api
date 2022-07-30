@@ -19,8 +19,8 @@ class dfair_io {
     this.s.connect({ host: ip, port: 30046 }); //create a client socket to this device
 
     this.s.on("data", (payload) => {
-      console.log("Data received:" + payload);
-      this.processIncomingData(payload);//.activePromiseResolve();
+      console.log("Data received:" + payload + " size:" + payload.length);
+      this.processIncomingData(payload); //.activePromiseResolve();
     });
 
     // s.on("connect", function (x, self) {
@@ -60,33 +60,51 @@ class dfair_io {
     clearTimeout(timeout);
   }
 
-  buildParam(name, unit, endpoint, address, datatype) {
+  buildParam(name, unit, endpoint, address, datatype, scale) {
     let p = {};
     p.name = name;
     p.unit = unit;
     p.endpoint = endpoint;
     p.address = address;
     p.datatype = datatype;
+    p.scale = scale;
     p.value = -1111;
     p.valuetimestamp = 0; //UTC timestamp in milliseconds
+
     return p;
   }
 
   initDataParams() {
     //ParameterList.cs
     let params = [];
-    params.push(this.buildParam("relative humidity", "%", 4, 5232, "byte"));
     params.push(
-      this.buildParam("Actual Supply Fan Speed", "rpm", 4, 5200, "ushort")
+      this.buildParam(
+        "relative humidity measured",
+        "%",
+        4,
+        5232,
+        "byte",
+        100 / 255
+      )
+    ); //byte value * 100 / 255 - basically a scaling operation
+    params.push(
+      this.buildParam("Actual Supply Fan Speed", "rpm", 4, 5200, "ushort", 1)
     ); //line 258 AddParameter<ushort>("Actual Supply Fan Speed", 4, 5200, ParameterType.WORD, ParameterFlags.ReadOnly, 1);
     params.push(
-      this.buildParam("Actual Extract Fan Speed", "rpm",4 , 5201, "ushort")
+      this.buildParam("Actual Extract Fan Speed", "rpm", 4, 5201, "ushort", 1)
     ); //line 259 AddParameter<ushort>("Actual Extract Fan Speed", 4, 5201, ParameterType.WORD, ParameterFlags.ReadOnly, 1);
 
     params.push(
-      this.buildParam("Total running minutes", "min", 0, 992, "uint")
+      this.buildParam("Total running minutes", "min", 0, 992, "uint", 1)
     ); //line 259 AddParameter<ushort>("Actual Extract Fan Speed", 4, 5201, ParameterType.WORD, ParameterFlags.ReadOnly, 1);
     return params;
+  }
+
+  debugDumpData() {
+    console.log("--------------------------------");
+    for (let param of this.dataParams) {
+      console.log(param.name + " " + param.value);
+    }
   }
 
   refreshData() {
@@ -95,6 +113,7 @@ class dfair_io {
     this.ArefreshData().then(() => {
       setTimeout(() => {
         this.refreshData();
+        this.debugDumpData();
       }, 2000);
     });
   }
@@ -103,20 +122,20 @@ class dfair_io {
   async ArefreshData() {
     //await this.operationReadValue(2);
     console.log("ArefreshData");
-    
-      console.log("Refreshing data");
-      //refresh all data parameters
-      let timestampBegin = Date.now();
 
-      for(const param of this.dataParams){
-         console.log("Start read of param:" + param.name);
-         await this.operationReadValue(param);
-         await this.sleep(1000);
-         console.log("processed parameter:" + param.name);
-       }
-      
-      let millis = Date.now() - timestampBegin;
-      console.log("Refresh took:" + millis + " milliseconds");
+    console.log("Refreshing data");
+    //refresh all data parameters
+    let timestampBegin = Date.now();
+
+    for (const param of this.dataParams) {
+      console.log("Start read of param:" + param.name);
+      await this.operationReadValue(param);
+      await this.sleep(100);
+      console.log("processed parameter:" + param.name);
+    }
+
+    let millis = Date.now() - timestampBegin;
+    console.log("Refresh took:" + millis + " milliseconds");
   }
 
   sleep(ms) {
@@ -132,7 +151,7 @@ class dfair_io {
 
   //Read operation takes place here
   async operationReadValue(param) {
-    this.activeOperation = param;
+    this.activeParam = param;
 
     this.activePromise = new Promise((resolve, reject) => {
       this.activePromiseResolve = resolve;
@@ -140,13 +159,14 @@ class dfair_io {
     });
     //build and read frame
 
-    const buffer = Buffer.alloc(63,0)
-    
+    const buffer = Buffer.alloc(63, 0);
+
     buffer[0] = param.endpoint; //endpoint
     buffer[1] = 4; //read
-    buffer[2] = (param.address >> 8);
-    buffer[3] = (param.address && 0x00F);
-    
+    //buffer[2] = (param.address >> 8);
+    //buffer[3] = (param.address && 0x00F);
+    buffer.writeUint16BE(param.address, 2);
+
     this.s.write(new Uint8Array(buffer));
 
     this.activeTimeout = setTimeout(this.activeOperationTimeout, 3000); //1 second to perform the network operation - should be sufficient
@@ -157,6 +177,17 @@ class dfair_io {
 
   processIncomingData(payload) {
     //determine if the data is for the current packet
+    if (this.activeParam.datatype === "byte") {
+      this.activeParam.value = payload[0];
+    } else if (this.activeParam.datatype === "ushort") {
+      this.activeParam.value = payload.readUInt16BE();
+    } else if (this.activeParam.datatype === "uint") {
+      this.activeParam.value = payload.readUInt32BE();
+    } else {
+      throw "unhandled datatype:" + this.activeParam.datatype;
+    }
+
+    this.activeParam.value *= this.activeParam.scale;
 
     //clear timeout
     clearTimeout(this.activeTimeout);

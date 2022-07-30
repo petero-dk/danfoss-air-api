@@ -1,5 +1,7 @@
 const { time } = require("console");
 var net = require("net");
+const { runInThisContext } = require("vm");
+const { threadId } = require("worker_threads");
 
 //handles the direct io with a physical Danfoss Air device
 class dfair_io {
@@ -10,14 +12,15 @@ class dfair_io {
 
     this.timeout = null;
 
-    var s = new net.Socket();
+    this.s = new net.Socket();
 
     var self = this;
 
-    s.connect({ host: ip, port: 30046 }); //create a client socket to this device
+    this.s.connect({ host: ip, port: 30046 }); //create a client socket to this device
 
-    s.on("data", (payload) => {
+    this.s.on("data", (payload) => {
       console.log("Data received:" + payload);
+      this.processIncomingData(payload);//.activePromiseResolve();
     });
 
     // s.on("connect", function (x, self) {
@@ -25,16 +28,16 @@ class dfair_io {
     //   self.sanityCheck(); //TODO: how to get the scope to work
     // });
 
-    s.on("connect", () => {
+    this.s.on("connect", () => {
       console.log("Connected");
       this.sanityCheck(); //TODO: how to get the scope to work
     });
 
-    s.on("end", function (e) {
+    this.s.on("end", function (e) {
       console.log("end:" + e);
     });
 
-    s.on("error", function (err) {
+    this.s.on("error", function (err) {
       console.log("Error:" + err);
       this.cleanup();
     });
@@ -57,10 +60,11 @@ class dfair_io {
     clearTimeout(timeout);
   }
 
-  buildParam(name, unit, address, datatype) {
+  buildParam(name, unit, endpoint, address, datatype) {
     let p = {};
     p.name = name;
     p.unit = unit;
+    p.endpoint = endpoint;
     p.address = address;
     p.datatype = datatype;
     p.value = -1111;
@@ -71,12 +75,16 @@ class dfair_io {
   initDataParams() {
     //ParameterList.cs
     let params = [];
-    params.push(this.buildParam("relative humidity", "%", 5232, "byte"));
+    params.push(this.buildParam("relative humidity", "%", 4, 5232, "byte"));
     params.push(
-      this.buildParam("Actual Supply Fan Speed", "rpm", 5200, "ushort")
+      this.buildParam("Actual Supply Fan Speed", "rpm", 4, 5200, "ushort")
     ); //line 258 AddParameter<ushort>("Actual Supply Fan Speed", 4, 5200, ParameterType.WORD, ParameterFlags.ReadOnly, 1);
     params.push(
-      this.buildParam("Actual Extract Fan Speed", "rpm", 5201, "ushort")
+      this.buildParam("Actual Extract Fan Speed", "rpm",4 , 5201, "ushort")
+    ); //line 259 AddParameter<ushort>("Actual Extract Fan Speed", 4, 5201, ParameterType.WORD, ParameterFlags.ReadOnly, 1);
+
+    params.push(
+      this.buildParam("Total running minutes", "min", 0, 992, "uint")
     ); //line 259 AddParameter<ushort>("Actual Extract Fan Speed", 4, 5201, ParameterType.WORD, ParameterFlags.ReadOnly, 1);
     return params;
   }
@@ -93,19 +101,22 @@ class dfair_io {
   //refreshes all the data in the dataParams
   //should be executed periodically
   async ArefreshData() {
+    //await this.operationReadValue(2);
     console.log("ArefreshData");
-    return new Promise((resolve, reject) => {
+    
       console.log("Refreshing data");
       //refresh all data parameters
       let timestampBegin = Date.now();
-      this.dataParams.forEach((param) => {
-        //await this.operationReadValue(param);
-        //await this.sleep(100);
-      });
+
+      for(const param of this.dataParams){
+         console.log("Start read of param:" + param.name);
+         await this.operationReadValue(param);
+         await this.sleep(1000);
+         console.log("processed parameter:" + param.name);
+       }
+      
       let millis = Date.now() - timestampBegin;
       console.log("Refresh took:" + millis + " milliseconds");
-      resolve(true);
-    });
   }
 
   sleep(ms) {
@@ -116,16 +127,29 @@ class dfair_io {
 
   activeOperationTimeout() {
     console.log("activeOperationTimeout");
-    this.activePromise.reject();
+    this.activePromiseReject(); //.reject();
   }
 
+  //Read operation takes place here
   async operationReadValue(param) {
     this.activeOperation = param;
 
-    this.activePromise = new Promise((resolve, reject) => {});
+    this.activePromise = new Promise((resolve, reject) => {
+      this.activePromiseResolve = resolve;
+      this.activePromiseReject = reject;
+    });
     //build and read frame
 
-    this.activeTimeout = setTimeout(this.activeOperationTimeout, 1000); //1 second to perform the network operation - should be sufficient
+    const buffer = Buffer.alloc(63,0)
+    
+    buffer[0] = param.endpoint; //endpoint
+    buffer[1] = 4; //read
+    buffer[2] = (param.address >> 8);
+    buffer[3] = (param.address && 0x00F);
+    
+    this.s.write(new Uint8Array(buffer));
+
+    this.activeTimeout = setTimeout(this.activeOperationTimeout, 3000); //1 second to perform the network operation - should be sufficient
     return this.activePromise;
   }
 
@@ -135,8 +159,9 @@ class dfair_io {
     //determine if the data is for the current packet
 
     //clear timeout
+    clearTimeout(this.activeTimeout);
     this.activeTimeout = null;
-    this.activePromise.resolve();
+    this.activePromiseResolve();
   }
 }
 

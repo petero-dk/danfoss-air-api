@@ -23,14 +23,10 @@ class dfair_io {
       this.processIncomingData(payload); //.activePromiseResolve();
     });
 
-    // s.on("connect", function (x, self) {
-    //   console.log("Connect:" + x);
-    //   self.sanityCheck(); //TODO: how to get the scope to work
-    // });
 
     this.s.on("connect", () => {
       console.log("Connected");
-      this.sanityCheck(); //TODO: how to get the scope to work
+      this.sanityCheck();
     });
 
     this.s.on("end", function (e) {
@@ -89,14 +85,13 @@ class dfair_io {
     ); //byte value * 100 / 255 - basically a scaling operation
     params.push(
       this.buildParam("Actual Supply Fan Speed", "rpm", 4, 5200, "ushort", 1)
-    ); //line 258 AddParameter<ushort>("Actual Supply Fan Speed", 4, 5200, ParameterType.WORD, ParameterFlags.ReadOnly, 1);
+    );
     params.push(
       this.buildParam("Actual Extract Fan Speed", "rpm", 4, 5201, "ushort", 1)
-    ); //line 259 AddParameter<ushort>("Actual Extract Fan Speed", 4, 5201, ParameterType.WORD, ParameterFlags.ReadOnly, 1);
-
+    );
     params.push(
       this.buildParam("Total running minutes", "min", 0, 992, "uint", 1)
-    ); //line 259 AddParameter<ushort>("Actual Extract Fan Speed", 4, 5201, ParameterType.WORD, ParameterFlags.ReadOnly, 1);
+    ); 
     return params;
   }
 
@@ -161,11 +156,9 @@ class dfair_io {
 
     const buffer = Buffer.alloc(63, 0);
 
-    buffer[0] = param.endpoint; //endpoint
+    buffer[0] = param.endpoint; //endpoint - need to find out what is going on with the endpoints
     buffer[1] = 4; //read
-    //buffer[2] = (param.address >> 8);
-    //buffer[3] = (param.address && 0x00F);
-    buffer.writeUint16BE(param.address, 2);
+     buffer.writeUint16BE(param.address, 2);
 
     this.s.write(new Uint8Array(buffer));
 

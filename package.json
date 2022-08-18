@@ -2,10 +2,10 @@
   "name": "dfair",
   "version": "0.0.1",
   "description": "Danfoss Air IO driver with MQTT support",
-  "main": "app.js",
+  "main": "demoapp_knownipnumber.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "debug": "node --inspect app.js"
+    "debug": "node --inspect demoapp_knownipnumber.js"
   },
   "repository": {
     "type": "git",

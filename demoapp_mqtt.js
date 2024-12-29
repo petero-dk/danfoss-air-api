@@ -19,7 +19,9 @@ async function init(mqttserverurl) {
       console.log(message.toString());
       client.end();
     });
-  } catch (err) {}
+  } catch (err) {
+    console.log("Exception: " + err);
+  }
 }
 
 export {init}

@@ -5,10 +5,12 @@ const { threadId } = require("worker_threads");
 
 //handles the direct io with a physical Danfoss Air device
 class dfair_io {
-  constructor(ip, callbackData) {
+  constructor(ip, DelaySeconds, Debug, CallbackFunction) {
     this.ip = ip;
-    this.callbackData = callbackData;
-    this.dataParams = this.initDataParams();
+    this.delaySeconds = DelaySeconds;
+    this.debug = Debug;
+    this.callbackFunction = CallbackFunction;
+    this.dataParams = this.initDataParams(); //everything goes in here (bloody mess)
 
     this.timeout = null;
 
@@ -19,10 +21,12 @@ class dfair_io {
     this.s.connect({ host: ip, port: 30046 }); //create a client socket to this device
 
     this.s.on("data", (payload) => {
-      console.log("Data received:" + payload + " size:" + payload.length);
+      if(this.debug){
+        console.log("Data received:" + payload + " size:" + payload.length);
+      }
+      
       this.processIncomingData(payload); //.activePromiseResolve();
     });
-
 
     this.s.on("connect", () => {
       console.log("Connected");
@@ -42,13 +46,13 @@ class dfair_io {
   }
 
   sanityCheck() {
-    //Check that we have a sensible Danfoss Air controller in the other end
+    //TODO consider checking that we have a sensible Danfoss Air controller in the other end
 
     //finally start the cyclic data refresh
     console.log("Sanity passed");
     this.timeout = setTimeout(() => {
       this.refreshData();
-    }, 1000);
+    }, this.delaySeconds * 1000);
   }
 
   cleanup() {
@@ -71,7 +75,7 @@ class dfair_io {
   }
 
   initDataParams() {
-    //ParameterList.cs
+    //ParameterList.cs - where to find the parameters - note to future self.
     let params = [];
     params.push(
       this.buildParam(
@@ -91,11 +95,12 @@ class dfair_io {
     );
     params.push(
       this.buildParam("Total running minutes", "min", 0, 992, "uint", 1)
-    ); 
+    );
     return params;
   }
 
-  debugDumpData() {
+  //this function does a nice printout of the data refreshed
+  debugDumpData() { 
     console.log("--------------------------------");
     for (let param of this.dataParams) {
       console.log(param.name + " " + param.value);
@@ -103,13 +108,14 @@ class dfair_io {
   }
 
   refreshData() {
-    //this.ArefreshData();
-
     this.ArefreshData().then(() => {
       setTimeout(() => {
         this.refreshData();
-        this.debugDumpData();
-      }, 2000);
+        if (this.debug) {
+          this.debugDumpData();
+        }
+        this.callbackFunction(this.dataParams);
+      }, this.delaySeconds * 1000);
     });
   }
   //refreshes all the data in the dataParams
@@ -123,14 +129,20 @@ class dfair_io {
     let timestampBegin = Date.now();
 
     for (const param of this.dataParams) {
-      console.log("Start read of param:" + param.name);
+      if (this.debug) {
+        console.log("Start read of param:" + param.name);
+      }
       await this.operationReadValue(param);
       await this.sleep(100);
-      console.log("processed parameter:" + param.name);
+      if (this.debug) {
+        console.log("processed parameter:" + param.name);
+      }
     }
 
     let millis = Date.now() - timestampBegin;
-    console.log("Refresh took:" + millis + " milliseconds");
+    if (this.debug) {
+      console.log("Refresh took:" + millis + " milliseconds");
+    }
   }
 
   sleep(ms) {
@@ -141,7 +153,7 @@ class dfair_io {
 
   activeOperationTimeout() {
     console.log("activeOperationTimeout");
-    this.activePromiseReject(); //.reject();
+    this.activePromiseReject();
   }
 
   //Read operation takes place here
@@ -152,13 +164,13 @@ class dfair_io {
       this.activePromiseResolve = resolve;
       this.activePromiseReject = reject;
     });
-    //build and read frame
 
+    //build and read frame
     const buffer = Buffer.alloc(63, 0);
 
-    buffer[0] = param.endpoint; //endpoint - need to find out what is going on with the endpoints
+    buffer[0] = param.endpoint; //TODO need to find out what is going on with the endpoints (design mess from old days?)
     buffer[1] = 4; //read
-     buffer.writeUint16BE(param.address, 2);
+    buffer.writeUint16BE(param.address, 2);
 
     this.s.write(new Uint8Array(buffer));
 
@@ -166,7 +178,9 @@ class dfair_io {
     return this.activePromise;
   }
 
-  operationWriteValue(param, value) {}
+  operationWriteValue(param, value) {
+    //TODO - where did the ol' write operations code go?
+  }
 
   processIncomingData(payload) {
     //determine if the data is for the current packet
@@ -189,8 +203,12 @@ class dfair_io {
   }
 }
 
-function init(ip, callbackData) {
-  return new dfair_io(ip, callbackData);
+function init(ip,  DelaySeconds, Debug, CallbackFunction) {
+  if(DelaySeconds < 3){
+    console.log("Consider - why do you need such fast readings? Every 30 seconds should be just fine for a ventilation system");
+  }
+
+  return new dfair_io(ip, DelaySeconds, Debug, CallbackFunction);
 }
 
 exports.init = init;

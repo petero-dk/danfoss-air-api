@@ -1,6 +1,6 @@
 {
   "name": "dfair",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Danfoss Air IO driver with MQTT support",
   "main": "demoapp_knownipnumber.js",
   "scripts": {
@@ -22,6 +22,6 @@
   },
   "homepage": "https://github.com/Laro88/dfair#readme",
   "dependencies": {
-    "mqtt": "^4.3.7"
+    "mqtt": "^5.10.3"
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "dfair",
   "version": "0.0.2",
-  "description": "Danfoss Air IO driver with MQTT support",
+  "description": "Danfoss Air IO driver",
   "main": "demoapp_knownipnumber.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -12,11 +12,10 @@
     "url": "git+https://github.com/Laro88/dfair.git"
   },
   "keywords": [
-    "Danfoss",
-    "Air"
+    "Danfoss Air IO driver"
   ],
   "author": "JERA",
-  "license": "ISC",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/Laro88/dfair/issues"
   },

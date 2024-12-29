@@ -3,16 +3,16 @@
 A simple communication solution over lan for a Danfoss Air ventilation system written in node.js
 
 NOTE: This is an early beta - and I just do it to solve some home automation issues, so if you need something special / done rapidly / whatever - then the only way to ensure my dedicated attention is 100€/hour payments :-)
-Cheapest is to send me a message and might be able to do something about it
+So - the cheapest is to send me a message and I might be able to do something about it, or at least tell you that I wont be fixing that anytime soon :-)
 
 ## Files
 The dfair_io.js is the most important file...
-Besides this then the demoapp_knownipnumber.js is the best / most important app - this is the one I use when I mess around.
+Besides this then the demoapp_knownipnumber.js is the best / most important app - this is the one I use when I mess around in vscode.
 
 ## Usage
 Use the dfair_io.js module as demonstrated in the demoapp_knownipnumber.js if you know the ip of the Danfoss Air unit - what as you see fit.
 
-Use wireshark to grab all and you should have the ip by filtering for : <b>eth.addr contains 00:07:68<b>
+Use wireshark to grab all and you should have the ip by filtering for : <b>eth.addr contains 00:07:68</b>
 Otherwise use the Danfoss Air service tool from ehre: https://www.danfoss.com/da-dk/service-and-support/downloads/dhs/danfoss-air-pc-tool-end-user/
 
 

@@ -11,6 +11,8 @@ class dfair_io {
     this.debug = Debug;
     this.callbackFunction = CallbackFunction;
     this.dataParams = this.initDataParams(); //everything goes in here (bloody mess)
+    this.outParams = this.initOutParams(); 
+    
 
     this.timeout = null;
 
@@ -60,7 +62,7 @@ class dfair_io {
     clearTimeout(timeout);
   }
 
-  buildParam(name, unit, endpoint, address, datatype, scale) {
+  buildParam(name, unit, endpoint, address, datatype, scale, precision) {
     let p = {};
     p.name = name;
     p.unit = unit;
@@ -68,6 +70,7 @@ class dfair_io {
     p.address = address;
     p.datatype = datatype;
     p.scale = scale;
+    p.precision = precision;
     p.value = -1111;
     p.valuetimestamp = 0; //UTC timestamp in milliseconds
 
@@ -84,18 +87,66 @@ class dfair_io {
         4,
         5232,
         "byte",
-        100 / 255
+        100 / 255,
+        1
       )
     ); //byte value * 100 / 255 - basically a scaling operation
     params.push(
-      this.buildParam("Actual Supply Fan Speed", "rpm", 4, 5200, "ushort", 1)
+      this.buildParam("Actual Supply Fan Speed", "rpm", 4, 5200, "ushort", 1, "") //word
     );
     params.push(
-      this.buildParam("Actual Extract Fan Speed", "rpm", 4, 5201, "ushort", 1)
+      this.buildParam("Actual Extract Fan Speed", "rpm", 4, 5201, "ushort", 1, "")
     );
     params.push(
-      this.buildParam("Total running minutes", "min", 0, 992, "uint", 1)
+      this.buildParam("Total running minutes", "min", 0, 992, "uint", 1, "")
     );
+    params.push(
+      this.buildParam("Battery Indication Percent", "%", 0, 783, "byte", 100/255, 1)
+    );
+    params.push(
+      this.buildParam("Filter Fouling", "%", 0, 5226, "byte", 100/255, 1) //percent
+    )
+    params.push(
+      this.buildParam("Outdoor Temperature", "c", 0, 830, "uint", 1, 1) //TEMPERATURE
+    );
+
+    params.push(
+      this.buildParam("Boost", "", 0, 5424, "bool", 1) //writeable
+    );
+    params.push(
+      this.buildParam("Defrost status", "", 0, 5617, "bool", 1)
+    );
+
+    params.push(
+      this.buildParam("Temperature 1", "c", 4, 5234, "ushort", 0.01, "")
+    );
+    params.push(
+      this.buildParam("Temperature 3", "c", 4, 5235, "ushort", 0.01, "")
+    );
+    params.push(
+      this.buildParam("Temperature 3", "c", 4, 5236, "ushort", 0.01, "")
+    );
+    params.push(
+      this.buildParam("Temperature 4", "c", 4, 5237, "ushort", 0.01, "")
+    );
+    
+    //  params.push(
+    //    this.buildParam("HRV Unit ID", "", 0, 5605, "string", 1) 
+    //  );
+    
+    params.push(
+      this.buildParam("Unit Hardware Revision", "", 4, 34, "ushort", 1, "") 
+    );
+    params.push(
+      this.buildParam("Unit Hardware Revision", "", 4, 35, "ushort", 1, "") 
+    );
+    params.push(
+      this.buildParam("Unit SerialNumber High Word", "", 4, 36, "ushort", 1, "") 
+    );
+    params.push(
+      this.buildParam("Unit SerialNumber Low Word", "", 4, 37, "ushort", 1, "") 
+    );
+
     return params;
   }
 
@@ -114,7 +165,14 @@ class dfair_io {
         if (this.debug) {
           this.debugDumpData();
         }
-        this.callbackFunction(this.dataParams);
+
+        //create a clean set of outputs
+        let data = [];
+        for (const param of this.dataParams) {
+          data.push({"name": param.name, "unit": param.unit, "value": param.value})
+        }
+
+        this.callbackFunction(data);
       }, this.delaySeconds * 1000);
     });
   }
@@ -186,15 +244,24 @@ class dfair_io {
     //determine if the data is for the current packet
     if (this.activeParam.datatype === "byte") {
       this.activeParam.value = payload[0];
+    }else if (this.activeParam.datatype === "bool") {
+      this.activeParam.value = payload[0] == 1;
     } else if (this.activeParam.datatype === "ushort") {
       this.activeParam.value = payload.readUInt16BE();
     } else if (this.activeParam.datatype === "uint") {
       this.activeParam.value = payload.readUInt32BE();
+    } else if (this.activeParam.datatype === "string") {
+      throw "string datatype not handled properly TODO";
+      //this.activeParam.value = payload.buffer();
     } else {
       throw "unhandled datatype:" + this.activeParam.datatype;
     }
 
     this.activeParam.value *= this.activeParam.scale;
+    
+    if(this.activeParam.precision != ""){
+      this.activeParam.value = round(this.activeParam.value, this.activeParam.precision);  
+    }
 
     //clear timeout
     clearTimeout(this.activeTimeout);
@@ -209,6 +276,11 @@ function init(ip,  DelaySeconds, Debug, CallbackFunction) {
   }
 
   return new dfair_io(ip, DelaySeconds, Debug, CallbackFunction);
+}
+
+function round(value, precision) {
+  var multiplier = Math.pow(10, precision || 0);
+  return Math.round(value * multiplier) / multiplier;
 }
 
 exports.init = init;

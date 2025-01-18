@@ -1,6 +1,6 @@
 {
   "name": "dfair",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Danfoss Air IO driver",
   "main": "demoapp_knownipnumber.js",
   "scripts": {

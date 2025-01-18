@@ -11,7 +11,7 @@ class dfair_io {
     this.debug = Debug;
     this.callbackFunction = CallbackFunction;
     this.dataParams = this.initDataParams(); //everything goes in here (bloody mess)
-    this.outParams = this.initOutParams(); 
+   
     
 
     this.timeout = null;
@@ -98,23 +98,23 @@ class dfair_io {
       this.buildParam("Actual Extract Fan Speed", "rpm", 4, 5201, "ushort", 1, "")
     );
     params.push(
-      this.buildParam("Total running minutes", "min", 0, 992, "uint", 1, "")
+      this.buildParam("Total running minutes", "min", 4, 992, "uint", 1, "")
     );
     params.push(
-      this.buildParam("Battery Indication Percent", "%", 0, 783, "byte", 100/255, 1)
+      this.buildParam("Battery Indication Percent", "%", 4, 783, "byte", 100/255, 1)
     );
     params.push(
-      this.buildParam("Filter Fouling", "%", 0, 5226, "byte", 100/255, 1) //percent
+      this.buildParam("Filter Fouling", "%", 4, 5226, "byte", 100/255, 1) //percent
     )
     params.push(
-      this.buildParam("Outdoor Temperature", "c", 0, 830, "uint", 1, 1) //TEMPERATURE
+      this.buildParam("Outdoor Temperature", "c", 4, 830, "uint", 1, 1) //TEMPERATURE
     );
 
     params.push(
-      this.buildParam("Boost", "", 0, 5424, "bool", 1) //writeable
+      this.buildParam("Boost", "", 4, 5424, "bool", 1) //writeable
     );
     params.push(
-      this.buildParam("Defrost status", "", 0, 5617, "bool", 1)
+      this.buildParam("Defrost status", "", 4, 5617, "bool", 1)
     );
 
     params.push(

@@ -13,6 +13,8 @@ const dfair = new DanfossAir({
     singleCallbackFunction: dfairSingleCallback
 });
 
+dfair.start();
+
 function dfairSingleCallback(data: ParamData): void {
     console.log("Single data received:", JSON.stringify(data, null, 2));
 }

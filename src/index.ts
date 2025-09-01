@@ -61,7 +61,7 @@ export class DanfossAir {
   private singleCallbackFunction?: SingleCallbackFunction;
   private dataParams: DanfossParam[];
   private timeout: NodeJS.Timeout | null = null;
-  private socket: net.Socket;
+  private socket: net.Socket | null = null;
   private activeParam?: DanfossParam;
   private activePromise?: Promise<void>;
   private activePromiseResolve?: () => void;
@@ -77,10 +77,6 @@ export class DanfossAir {
     this.callbackFunction = options.callbackFunction;
     this.singleCallbackFunction = options.singleCallbackFunction;
     this.dataParams = this.initDataParams();
-
-    this.socket = new net.Socket();
-    this.setupSocket();
-
 
     // Find common cycle for all intervals
     const intervals = this.dataParams.filter(param => (param.interval || options.delaySeconds) > 0).map(param => param.interval || options.delaySeconds as number);
@@ -109,6 +105,7 @@ export class DanfossAir {
   }
 
   private setupSocket(): void {
+    this.socket = new net.Socket();
     this.socket.connect({ host: this.ip, port: 30046 });
 
     this.socket.on('data', (payload: Buffer) => {
@@ -131,12 +128,21 @@ export class DanfossAir {
     });
   }
 
+  public start(): void {
+    this.setupSocket();
+
+    if (this.socket) {
+      this.socket.destroy();
+      this.timeout = setTimeout(() => {
+        this.refreshData();
+      }, 500);
+    }
+  }
+
   private sanityCheck(): void {
     // TODO consider checking that we have a sensible Danfoss Air controller in the other end
     this.log('Sanity passed');
-    this.timeout = setTimeout(() => {
-      this.refreshData();
-    }, 500);
+
   }
 
   public cleanup(): void {
@@ -211,15 +217,19 @@ export class DanfossAir {
     );
 
     params.push(
-      this.buildParam('filter_fouling', 'Filter Fouling', '%', 4, 5226, 'byte', 100 / 255, 1, 60)
+      this.buildParam('filter_remaining', 'Filter Remaining', '%', 1, 0x146a, 'byte', 100 / 255, 1, 60)
     );
 
     params.push(
-      this.buildParam('temperature_outdoor', 'Outdoor Temperature', 'c', 4, 830, 'uint', 1, 1, 120)
+      this.buildParam('temperature_room', 'Room Temperature', 'c', 1, 0x0300, 'ushort', 0.01, 1, 120)
     );
 
     params.push(
-      this.buildParam('boost', 'Boost', '', 4, 5424, 'bool', 1, '')
+      this.buildParam('temperature_room_calc', 'Calculated Room Temperature', 'c', 0, 0x1496, 'ushort', 0.01, 1, 120)
+    );
+
+    params.push(
+      this.buildParam('boost', 'Boost', '', 1, 5424, 'bool', 1, '')
     );
 
     params.push(
@@ -227,19 +237,19 @@ export class DanfossAir {
     );
 
     params.push(
-      this.buildParam('temperature_1', 'Temperature 1', 'c', 4, 5234, 'ushort', 0.01, '', 60)
+      this.buildParam('temperature_outdoor', 'Temperature 1', 'c', 4, 0x1472, 'ushort', 0.01, '', 60)
     );
 
     params.push(
-      this.buildParam('temperature_2', 'Temperature 2', 'c', 4, 5235, 'ushort', 0.01, '', 60)
+      this.buildParam('temperature_supply', 'Temperature 2', 'c', 4, 0x1473, 'ushort', 0.01, '', 60)
     );
 
     params.push(
-      this.buildParam('temperature_3', 'Temperature 3', 'c', 4, 5236, 'ushort', 0.01, '', 60)
+      this.buildParam('temperature_extract', 'Temperature 3', 'c', 4, 0x1474, 'ushort', 0.01, '', 60)
     );
 
     params.push(
-      this.buildParam('temperature_4', 'Temperature 4', 'c', 4, 5237, 'ushort', 0.01, '', 60)
+      this.buildParam('temperature_exhaust', 'Temperature 4', 'c', 4, 0x1475, 'ushort', 0.01, '', 60)
     );
 
     params.push(
@@ -297,6 +307,8 @@ export class DanfossAir {
   private currentStep: number = 0;
   private async refreshDataAsync(): Promise<void> {
 
+    this.setupSocket();
+
     this.log('ArefreshData');
     this.log('Refreshing data');
     if (this.currentStep >= this.cycle) {
@@ -332,6 +344,9 @@ export class DanfossAir {
       }
     }
 
+    if (this.socket) {
+      this.socket.destroy();
+    }
     const millis = Date.now() - timestampBegin;
     this.log(`Refresh took: ${millis} milliseconds`);
     this.currentStep += this.delaySeconds;
@@ -370,6 +385,9 @@ export class DanfossAir {
     buffer[1] = 4; // read
     buffer.writeUint16BE(param.address, 2);
 
+    if (!this.socket) 
+      throw new Error('Socket not initialized');
+    
     this.socket.write(new Uint8Array(buffer));
 
     this.activeTimeout = setTimeout(() => {

@@ -10,11 +10,6 @@ const dfair = new DanfossAir({
     debug: false
 });
 
-if (typeof dfair.operationWriteValue !== 'function') {
-    console.error('FAIL: operationWriteValue method not found');
-    process.exit(1);
-}
-
 if (typeof dfair.writeParameterValue !== 'function') {
     console.error('FAIL: writeParameterValue method not found');
     process.exit(1);

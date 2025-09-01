@@ -70,6 +70,8 @@ export class DanfossAir {
 
   private cycle: number;
   private step: number;
+  private writeBuffer: Buffer[] = [];
+  private pendingWritePromises: Array<{resolve: () => void, reject: (err: Error) => void}> = [];
 
   constructor(options: DanfossAirOptions) {
     this.ip = options.ip;
@@ -316,17 +318,12 @@ export class DanfossAir {
       throw new Error(`Parameter '${id}' is not writable`);
     }
 
-    this.setupSocket();
-    try {
-      await this.operationWriteValue(param, value);
-      // Update local value after successful write
+    return new Promise<void>((resolve, reject) => {
+      this.queueWriteOperation(param, value, resolve, reject);
+      // Update local value immediately for optimistic updates
       param.value = value;
       param.valuetimestamp = Date.now();
-    } finally {
-      if (this.socket) {
-        this.socket.destroy();
-      }
-    }
+    });
   }
 
   /**
@@ -351,6 +348,98 @@ export class DanfossAir {
       throw new Error('Fan step must be between 1 and 10');
     }
     await this.writeParameterValue('fan_step', step);
+  }
+
+  /**
+   * Queue a write operation to be sent during the next refresh cycle
+   */
+  private queueWriteOperation(param: DanfossParam, value: number | boolean, resolve: () => void, reject: (err: Error) => void): void {
+    try {
+      // Build write frame
+      const buffer = Buffer.alloc(63, 0);
+      buffer[0] = param.endpoint;
+      buffer[1] = 6; // write operation
+      buffer.writeUint16BE(param.address, 2);
+
+      // Encode value based on parameter datatype
+      let writeValue = value;
+      if (typeof value === 'number' && param.scale !== 1) {
+        // Reverse the scaling for writing
+        writeValue = Math.round(value / param.scale);
+      }
+
+      // Write the value according to datatype
+      switch (param.datatype) {
+        case 'bool':
+          buffer[4] = typeof value === 'boolean' ? (value ? 1 : 0) : (value ? 1 : 0);
+          break;
+        case 'byte':
+          if (typeof writeValue === 'number') {
+            buffer[4] = writeValue & 0xFF;
+          } else {
+            throw new Error('Byte parameter requires numeric value');
+          }
+          break;
+        case 'ushort':
+          if (typeof writeValue === 'number') {
+            buffer.writeUint16BE(writeValue & 0xFFFF, 4);
+          } else {
+            throw new Error('UShort parameter requires numeric value');
+          }
+          break;
+        case 'uint':
+          if (typeof writeValue === 'number') {
+            buffer.writeUint32BE(writeValue >>> 0, 4);
+          } else {
+            throw new Error('UInt parameter requires numeric value');
+          }
+          break;
+        default:
+          throw new Error(`Write operation not supported for datatype: ${param.datatype}`);
+      }
+
+      this.writeBuffer.push(buffer);
+      this.pendingWritePromises.push({ resolve, reject });
+      
+      this.log(`Queued write operation for ${param.name} with value ${value}`);
+    } catch (error) {
+      reject(error as Error);
+    }
+  }
+
+  /**
+   * Flush all pending write operations to the socket
+   */
+  private async flushWriteBuffer(): Promise<void> {
+    if (this.writeBuffer.length === 0) {
+      return;
+    }
+
+    this.log(`Flushing ${this.writeBuffer.length} write operations`);
+    
+    try {
+      for (const buffer of this.writeBuffer) {
+        if (!this.socket) {
+          throw new Error('Socket not initialized');
+        }
+        this.socket.write(new Uint8Array(buffer));
+        await this.sleep(100); // Small delay between write operations
+      }
+      
+      // Resolve all pending write promises
+      for (const promise of this.pendingWritePromises) {
+        promise.resolve();
+      }
+    } catch (error) {
+      // Reject all pending write promises
+      for (const promise of this.pendingWritePromises) {
+        promise.reject(error as Error);
+      }
+    } finally {
+      // Clear buffers
+      this.writeBuffer = [];
+      this.pendingWritePromises = [];
+    }
   }
 
   public debugDumpData(): void {
@@ -390,6 +479,9 @@ export class DanfossAir {
   private async refreshDataAsync(): Promise<void> {
 
     this.setupSocket();
+
+    // Flush any pending write operations
+    await this.flushWriteBuffer();
 
     this.log('ArefreshData');
     this.log('Refreshing data');
@@ -466,69 +558,6 @@ export class DanfossAir {
     buffer[0] = param.endpoint;
     buffer[1] = 4; // read
     buffer.writeUint16BE(param.address, 2);
-
-    if (!this.socket) 
-      throw new Error('Socket not initialized');
-    
-    this.socket.write(new Uint8Array(buffer));
-
-    this.activeTimeout = setTimeout(() => {
-      this.activeOperationTimeout();
-    }, 3000);
-
-    return this.activePromise;
-  }
-
-  public async operationWriteValue(param: DanfossParam, value: number | boolean): Promise<void> {
-    this.activeParam = param;
-
-    this.activePromise = new Promise<void>((resolve, reject) => {
-      this.activePromiseResolve = resolve;
-      this.activePromiseReject = reject;
-    });
-
-    // Build write frame
-    const buffer = Buffer.alloc(63, 0);
-    buffer[0] = param.endpoint;
-    buffer[1] = 6; // write operation
-    buffer.writeUint16BE(param.address, 2);
-
-    // Encode value based on parameter datatype
-    let writeValue = value;
-    if (typeof value === 'number' && param.scale !== 1) {
-      // Reverse the scaling for writing
-      writeValue = Math.round(value / param.scale);
-    }
-
-    // Write the value according to datatype
-    switch (param.datatype) {
-      case 'bool':
-        buffer[4] = typeof value === 'boolean' ? (value ? 1 : 0) : (value ? 1 : 0);
-        break;
-      case 'byte':
-        if (typeof writeValue === 'number') {
-          buffer[4] = writeValue & 0xFF;
-        } else {
-          throw new Error('Byte parameter requires numeric value');
-        }
-        break;
-      case 'ushort':
-        if (typeof writeValue === 'number') {
-          buffer.writeUint16BE(writeValue & 0xFFFF, 4);
-        } else {
-          throw new Error('UShort parameter requires numeric value');
-        }
-        break;
-      case 'uint':
-        if (typeof writeValue === 'number') {
-          buffer.writeUint32BE(writeValue >>> 0, 4);
-        } else {
-          throw new Error('UInt parameter requires numeric value');
-        }
-        break;
-      default:
-        throw new Error(`Write operation not supported for datatype: ${param.datatype}`);
-    }
 
     if (!this.socket) 
       throw new Error('Socket not initialized');

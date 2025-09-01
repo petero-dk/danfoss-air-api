@@ -20,7 +20,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/petero-dk/danfoss-air-api.git"
+    "url": "git+https://github.com/Laro88/dfair.git"
   },
   "keywords": [
     "danfoss",
@@ -35,9 +35,9 @@
   "author": "JERA",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/petero-dk/danfoss-air-api/issues"
+    "url": "https://github.com/Laro88/dfair/issues"
   },
-  "homepage": "https://github.com/petero-dk/danfoss-air-api#readme",
+  "homepage": "https://github.com/Laro88/dfair#readme",
   "dependencies": {},
   "devDependencies": {
     "@types/node": "^24.3.0",

@@ -65,6 +65,45 @@ Initialize a connection to your Danfoss Air unit.
 
 Returns a `DanfossAir` instance.
 
+### Using `singleCallbackFunction` and Direct Class Instantiation
+
+You can also use the `singleCallbackFunction` option to receive updates for each parameter as soon as it is read, instead of waiting for the full set. This is useful for streaming or real-time applications.
+
+#### Example: Using `singleCallbackFunction`
+
+```typescript
+import { DanfossAir, ParamData } from 'danfoss-air-api';
+
+const dfair = new DanfossAir({
+    ip: '192.168.1.100',
+    delaySeconds: 10,
+    debug: false,
+    singleCallbackFunction: (data: ParamData) => {
+        console.log('Single param update:', data);
+    }
+});
+```
+
+#### Direct Class Instantiation
+
+Instead of using the `init` function, you can instantiate the `DanfossAir` class directly for more advanced use cases. This allows you to specify both `callbackFunction` and `singleCallbackFunction` if desired:
+
+```typescript
+import { DanfossAir, ParamData } from 'danfoss-air-api';
+
+const dfair = new DanfossAir({
+    ip: '192.168.1.100',
+    delaySeconds: 10,
+    debug: true,
+    callbackFunction: (data: ParamData[]) => {
+        console.log('All params:', data);
+    },
+    singleCallbackFunction: (data: ParamData) => {
+        console.log('Single param:', data);
+    }
+});
+```
+
 ### Data Parameters
 
 The library provides access to the following parameters:
@@ -122,14 +161,14 @@ const danfossAir = init("192.168.1.100", 30, false, (data) => {
 
 ## Node-RED Integration
 
-For Node-RED users, check out [@Laro88/node-red-contrib-dfair](https://www.npmjs.com/package/node-red-contrib-dfair) which provides a ready-to-use Node-RED node based on this library.
+For Node-RED users, check out [@Laro88/node-red-dfair](https://github.com/Laro88/node-red-dfair) which provides a ready-to-use Node-RED node based on this library.
 
 ## Development
 
 ### Building from Source
 
 ```bash
-git clone https://github.com/petero-dk/danfoss-air-api.git
+git clone https://github.com/Laro88/dfair.git
 cd danfoss-air-api
 npm install
 npm run build
@@ -156,6 +195,11 @@ Tested with:
 - Node.js LTS version v22.12.0
 - Danfoss Air unit MAC address `00:07:68:...` (Danfoss A/S MAC range)
 
+Set the environment variable `DANFOSS_AIR_IP` to the discovered IP, and run 
+```
+npx tsx .\samples\demoapp_typescript.ts
+```
+
 ## Contributing
 
 Keep pull requests small, simple and easy to test. This library aims to be minimal and focused.
@@ -179,10 +223,19 @@ MIT License - see [LICENSE](./LICENSE) file for details.
 - **Minimum polling interval**: 3 seconds (the library will warn about faster intervals)
 - **Network timeout**: 3 seconds per parameter read
 
+Each parameter in the Danfoss Air API can have its own interval, an undefined interval, or a 0 interval value:
+
+- If a parameter has a specific interval (e.g., 60 seconds), it will only be updated at multiples of that interval, synchronized with the polling cycle.
+- If a parameter has an interval of 0 (such as hardware/software revision), it is read only once after connection and not polled again.
+- If a parameter's interval is undefined, it will be updated on every polling step.
+
+The library calculates a common polling cycle and step based on all defined intervals. The `step` is the greatest common divisor (GCD) of all intervals, and the `cycle` is the least common multiple (LCM). Polling occurs every `step` seconds, and each parameter is refreshed according to its interval within the cycle. This ensures efficient polling and avoids unnecessary network traffic. It maintains a single timer in the library and maintains a liniar polling of data from the system.
+
 ## Changelog
 
 ### v1.0.0
 - Complete TypeScript rewrite
+- Included ids for all params (without spaces)
 - Modern npm package structure
 - Improved type safety and documentation
 - Moved examples to samples/ directory

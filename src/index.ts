@@ -232,6 +232,23 @@ export class DanfossAir {
       this.buildParam('boost', 'Boost', '', 1, 5424, 'bool', 1, '')
     );
 
+    // Add more writable parameters based on Python implementation
+    params.push(
+      this.buildParam('bypass', 'Bypass', '', 1, 0x1460, 'bool', 1, '', 60)
+    );
+
+    params.push(
+      this.buildParam('automatic_bypass', 'Automatic Bypass', '', 1, 0x1706, 'bool', 1, '', 60)
+    );
+
+    params.push(
+      this.buildParam('operation_mode', 'Operation Mode', '', 1, 0x1412, 'byte', 1, '', 60)
+    );
+
+    params.push(
+      this.buildParam('fan_step', 'Fan Step', '', 1, 0x1561, 'byte', 1, '', 60)
+    );
+
     params.push(
       this.buildParam('defrost_status', 'Defrost status', '', 4, 5617, 'bool', 1, '', 60)
     );
@@ -269,6 +286,71 @@ export class DanfossAir {
     );
 
     return params;
+  }
+
+  /**
+   * Get a parameter by its ID
+   */
+  public getParameter(id: string): DanfossParam | undefined {
+    return this.dataParams.find(param => param.id === id);
+  }
+
+  /**
+   * Check if a parameter supports write operations
+   */
+  public isWritableParameter(id: string): boolean {
+    const writableParams = ['boost', 'bypass', 'automatic_bypass', 'operation_mode', 'fan_step'];
+    return writableParams.includes(id);
+  }
+
+  /**
+   * Write a value to a parameter by ID
+   */
+  public async writeParameterValue(id: string, value: number | boolean): Promise<void> {
+    const param = this.getParameter(id);
+    if (!param) {
+      throw new Error(`Parameter '${id}' not found`);
+    }
+    
+    if (!this.isWritableParameter(id)) {
+      throw new Error(`Parameter '${id}' is not writable`);
+    }
+
+    this.setupSocket();
+    try {
+      await this.operationWriteValue(param, value);
+      // Update local value after successful write
+      param.value = value;
+      param.valuetimestamp = Date.now();
+    } finally {
+      if (this.socket) {
+        this.socket.destroy();
+      }
+    }
+  }
+
+  /**
+   * Convenience method to activate boost mode
+   */
+  public async activateBoost(): Promise<void> {
+    await this.writeParameterValue('boost', true);
+  }
+
+  /**
+   * Convenience method to deactivate boost mode
+   */
+  public async deactivateBoost(): Promise<void> {
+    await this.writeParameterValue('boost', false);
+  }
+
+  /**
+   * Convenience method to set fan step (1-10)
+   */
+  public async setFanStep(step: number): Promise<void> {
+    if (step < 1 || step > 10) {
+      throw new Error('Fan step must be between 1 and 10');
+    }
+    await this.writeParameterValue('fan_step', step);
   }
 
   public debugDumpData(): void {
@@ -397,9 +479,67 @@ export class DanfossAir {
     return this.activePromise;
   }
 
-  public operationWriteValue(param: DanfossParam, value: number | boolean): void {
-    // TODO - where did the ol' write operations code go?
-    throw new Error('Write operations not yet implemented');
+  public async operationWriteValue(param: DanfossParam, value: number | boolean): Promise<void> {
+    this.activeParam = param;
+
+    this.activePromise = new Promise<void>((resolve, reject) => {
+      this.activePromiseResolve = resolve;
+      this.activePromiseReject = reject;
+    });
+
+    // Build write frame
+    const buffer = Buffer.alloc(63, 0);
+    buffer[0] = param.endpoint;
+    buffer[1] = 6; // write operation
+    buffer.writeUint16BE(param.address, 2);
+
+    // Encode value based on parameter datatype
+    let writeValue = value;
+    if (typeof value === 'number' && param.scale !== 1) {
+      // Reverse the scaling for writing
+      writeValue = Math.round(value / param.scale);
+    }
+
+    // Write the value according to datatype
+    switch (param.datatype) {
+      case 'bool':
+        buffer[4] = typeof value === 'boolean' ? (value ? 1 : 0) : (value ? 1 : 0);
+        break;
+      case 'byte':
+        if (typeof writeValue === 'number') {
+          buffer[4] = writeValue & 0xFF;
+        } else {
+          throw new Error('Byte parameter requires numeric value');
+        }
+        break;
+      case 'ushort':
+        if (typeof writeValue === 'number') {
+          buffer.writeUint16BE(writeValue & 0xFFFF, 4);
+        } else {
+          throw new Error('UShort parameter requires numeric value');
+        }
+        break;
+      case 'uint':
+        if (typeof writeValue === 'number') {
+          buffer.writeUint32BE(writeValue >>> 0, 4);
+        } else {
+          throw new Error('UInt parameter requires numeric value');
+        }
+        break;
+      default:
+        throw new Error(`Write operation not supported for datatype: ${param.datatype}`);
+    }
+
+    if (!this.socket) 
+      throw new Error('Socket not initialized');
+    
+    this.socket.write(new Uint8Array(buffer));
+
+    this.activeTimeout = setTimeout(() => {
+      this.activeOperationTimeout();
+    }, 3000);
+
+    return this.activePromise;
   }
 
   private processIncomingData(payload: Buffer): void {
@@ -407,19 +547,21 @@ export class DanfossAir {
       return;
     }
 
+    let responseValue: number | boolean;
+
     // Determine if the data is for the current packet
     switch (this.activeParam.datatype) {
       case 'byte':
-        this.activeParam.value = payload[0];
+        responseValue = payload[0];
         break;
       case 'bool':
-        this.activeParam.value = payload[0] === 1;
+        responseValue = payload[0] === 1;
         break;
       case 'ushort':
-        this.activeParam.value = payload.readUInt16BE();
+        responseValue = payload.readUInt16BE();
         break;
       case 'uint':
-        this.activeParam.value = payload.readUInt32BE();
+        responseValue = payload.readUInt32BE();
         break;
       case 'string':
         throw new Error('string datatype not handled properly TODO');
@@ -427,16 +569,21 @@ export class DanfossAir {
         throw new Error(`unhandled datatype: ${this.activeParam.datatype}`);
     }
 
-    if (typeof this.activeParam.value === 'number') {
-      this.activeParam.value *= this.activeParam.scale;
+    // For read operations, update the parameter value with scaling and precision
+    if (typeof responseValue === 'number') {
+      responseValue *= this.activeParam.scale;
 
       if (this.activeParam.precision !== '') {
-        this.activeParam.value = round(
-          this.activeParam.value,
+        responseValue = round(
+          responseValue,
           Number(this.activeParam.precision)
         );
       }
     }
+
+    // Update the parameter value and timestamp
+    this.activeParam.value = responseValue;
+    this.activeParam.valuetimestamp = Date.now();
 
     // Clear timeout
     if (this.activeTimeout) {

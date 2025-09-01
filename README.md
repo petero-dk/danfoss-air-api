@@ -104,6 +104,54 @@ const dfair = new DanfossAir({
 });
 ```
 
+### Write Operations
+
+The library now supports write operations to control your Danfoss Air unit:
+
+#### Quick Write Examples
+
+```javascript
+const { DanfossAir } = require('danfoss-air-api');
+
+const dfair = new DanfossAir({
+    ip: '192.168.1.100',
+    delaySeconds: 30,
+    debug: false
+});
+
+// Activate boost mode
+await dfair.activateBoost();
+
+// Set fan speed step (1-10)
+await dfair.setFanStep(5);
+
+// Deactivate boost mode
+await dfair.deactivateBoost();
+
+// Generic parameter write
+await dfair.writeParameterValue('fan_step', 3);
+
+// Clean up when done
+dfair.cleanup();
+```
+
+#### Available Write Methods
+
+- **`activateBoost()`** - Activate boost ventilation mode
+- **`deactivateBoost()`** - Deactivate boost ventilation mode  
+- **`setFanStep(step)`** - Set fan speed step (1-10)
+- **`writeParameterValue(id, value)`** - Write to any writable parameter
+- **`getParameter(id)`** - Get parameter information
+- **`isWritableParameter(id)`** - Check if parameter supports writing
+
+#### Writable Parameters
+
+- **boost** - Boost mode (boolean)
+- **bypass** - Bypass mode (boolean)
+- **automatic_bypass** - Automatic bypass (boolean)
+- **operation_mode** - Operation mode (0=demand, 1=program, 2=manual)
+- **fan_step** - Fan speed step (1-10)
+
 ### Data Parameters
 
 The library provides access to the following parameters:
@@ -138,6 +186,7 @@ See the [samples/](./samples/) directory for complete examples:
 - **Basic Usage**: `samples/demoapp_knownipnumber.js`
 - **MQTT Integration**: `samples/demoapp_mqtt.js`
 - **TypeScript Example**: `samples/demoapp_typescript.ts`
+- **Write Operations Demo**: `samples/write-operations-demo.js`
 
 ## MQTT Integration
 

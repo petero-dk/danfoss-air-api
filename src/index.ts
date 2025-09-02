@@ -98,7 +98,6 @@ export class DanfossAir {
   }
 
   private gcd(a: number, b: number): number {
-    this.log(`gcd ${a} ${b}`);
     if (isNaN(a)) {
       throw new Error(`Invalid number: ${a}`);
     }
@@ -113,45 +112,80 @@ export class DanfossAir {
     return (a * b) / this.gcd(a, b);
   }
 
-  private setupSocket(): void {
-    this.socket = new net.Socket();
-    this.socket.connect({ host: this.ip, port: 30046 });
+  private async setupSocket(): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      this.socket = new net.Socket();
 
-    this.socket.on('data', (payload: Buffer) => {
-      this.log(`Data received: ${payload} size: ${payload.length}`);
-      this.processIncomingData(payload);
+      this.socket.on('data', (payload: Buffer) => {
+        this.log(`Data received: ${payload} size: ${payload.length}`);
+        this.processIncomingData(payload);
+      });
+
+      const connectionTimeout = setTimeout(() => reject(new Error('Connection timed out')), 5000);
+      let resolved = false;
+
+      this.socket.on('connect', () => {
+        this.log('Connected');
+        clearTimeout(connectionTimeout);
+        resolved = true;
+        resolve();
+      });
+
+      this.socket.on('end', (e: any) => {
+        this.log(`end: ${e}`);
+      });
+
+      this.socket.on('error', (err: Error) => {
+        if (!resolved) {
+          reject(err);
+        }
+        this.log(`Error: ${err}`);
+        this.cleanup();
+      });
+
+
+      this.socket.connect({ host: this.ip, port: 30046 });
     });
 
-    this.socket.on('connect', () => {
-      this.log('Connected');
-      this.sanityCheck();
-    });
-
-    this.socket.on('end', (e: any) => {
-      this.log(`end: ${e}`);
-    });
-
-    this.socket.on('error', (err: Error) => {
-      this.log(`Error: ${err}`);
-      this.cleanup();
-    });
   }
 
-  public start(): void {
-    this.setupSocket();
+  public async start(): Promise<void> {
+    await this.setupSocket();
 
-    if (this.socket) {
+    await this.sanityCheck();
+
+    if (this.socket && !this.socket.closed && !this.socket.connecting) {
+      this.log(`Socket connected ${this.socket.remoteAddress}:${this.socket.remotePort} = ${this.socket?.closed} ${this.socket?.connecting}`);
       this.socket.destroy();
       this.timeout = setTimeout(() => {
         this.refreshData();
       }, 500);
+    } else {
+      this.log('Socket not connected');
     }
   }
 
-  private sanityCheck(): void {
+  private async sanityCheck(): Promise<void> {
     // TODO consider checking that we have a sensible Danfoss Air controller in the other end
-    this.log('Sanity passed');
 
+    const serialNumberHigh = this.getParameter('unit_serialnumber_high_word');
+    const serialNumberLow = this.getParameter('unit_serialnumber_low_word');
+
+    if (!serialNumberHigh || !serialNumberLow) {
+      throw new Error('Sanity check failed: Serial numbers are not available');
+    }
+
+    // Make sure the serial number values are set
+
+    await this.operationReadValue(serialNumberHigh);
+    await this.operationReadValue(serialNumberLow);
+
+    await this.sleep(100);
+
+    const serialNumber = (serialNumberHigh.value as number << 16) | (serialNumberLow.value as number & 0xFFFF);
+    this.log(`Serial Number: ${serialNumber}`);
+
+    this.log('Sanity passed');
   }
 
   public cleanup(): void {
@@ -320,7 +354,7 @@ export class DanfossAir {
     if (!param) {
       throw new Error(`Parameter '${id}' not found`);
     }
-    
+
     if (!this.isWritableParameter(id)) {
       throw new Error(`Parameter '${id}' is not writable`);
     }
@@ -421,7 +455,7 @@ export class DanfossAir {
     }
 
     this.writeBuffer.push(buffer);
-    
+
     this.log(`Queued write operation for ${param.name} with value ${value}`);
   }
 
@@ -434,7 +468,7 @@ export class DanfossAir {
     }
 
     this.log(`Flushing ${this.writeBuffer.length} write operations`);
-    
+
     try {
       for (const buffer of this.writeBuffer) {
         if (!this.socket) {
@@ -443,7 +477,7 @@ export class DanfossAir {
         this.socket.write(new Uint8Array(buffer));
         await this.sleep(100); // Small delay between write operations
       }
-      
+
       this.log('Write buffer flushed successfully');
     } catch (error) {
       // Use error callback to report write failures
@@ -488,13 +522,16 @@ export class DanfossAir {
           this.callbackFunction(data);
         }
       }, this.delaySeconds * 1000);
-    });
+    }).catch((err) => this.writeErrorCallback && this.writeErrorCallback(err));
   }
 
   private currentStep: number = 0;
   private async refreshDataAsync(): Promise<void> {
-
-    this.setupSocket();
+    if (this.socket?.connecting) {
+      this.log('Socket still connecting, skipping this cycle');
+      return;
+    }
+    await this.setupSocket();
 
     // Flush any pending write operations
     await this.flushWriteBuffer();
@@ -575,9 +612,9 @@ export class DanfossAir {
     buffer[1] = 4; // read
     buffer.writeUint16BE(param.address, 2);
 
-    if (!this.socket) 
+    if (!this.socket || this.socket.closed || this.socket.connecting)
       throw new Error('Socket not initialized');
-    
+
     this.socket.write(new Uint8Array(buffer));
 
     this.activeTimeout = setTimeout(() => {

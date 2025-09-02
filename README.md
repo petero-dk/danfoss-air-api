@@ -100,8 +100,86 @@ const dfair = new DanfossAir({
     },
     singleCallbackFunction: (data: ParamData) => {
         console.log('Single param:', data);
+    },
+    writeErrorCallback: (error: Error) => {
+        console.error('Write operation failed:', error.message);
+        // Handle write failures (e.g., network issues, device errors)
     }
 });
+```
+
+### Write Operations
+
+The library now supports write operations to control your Danfoss Air unit:
+
+#### Quick Write Examples
+
+```javascript
+const { DanfossAir } = require('danfoss-air-api');
+
+const dfair = new DanfossAir({
+    ip: '192.168.1.100',
+    delaySeconds: 30,
+    debug: false
+});
+
+// Activate boost mode
+await dfair.activateBoost();
+
+// Set fan speed step (1-10)
+await dfair.setFanStep(5);
+
+// Deactivate boost mode
+await dfair.deactivateBoost();
+
+// Generic parameter write
+await dfair.writeParameterValue('fan_step', 3);
+
+// Clean up when done
+dfair.cleanup();
+```
+
+#### Available Write Methods
+
+- **`activateBoost()`** - Activate boost ventilation mode
+- **`deactivateBoost()`** - Deactivate boost ventilation mode  
+- **`setFanStep(step)`** - Set fan speed step (1-10)
+- **`writeParameterValue(id, value)`** - Write to any writable parameter
+- **`getParameter(id)`** - Get parameter information
+- **`isWritableParameter(id)`** - Check if parameter supports writing
+
+#### Writable Parameters
+
+- **boost** - Boost mode (boolean)
+- **bypass** - Bypass mode (boolean)
+- **automatic_bypass** - Automatic bypass (boolean)
+- **operation_mode** - Operation mode (0=demand, 1=program, 2=manual)
+- **fan_step** - Fan speed step (1-10)
+
+#### Write Operation Error Handling
+
+Write operations use a buffered approach where commands are queued and sent during the refresh cycle. Error handling works as follows:
+
+- **Parameter validation errors** (invalid parameter, not writable, etc.) are thrown immediately as promise rejections
+- **Socket-level write errors** (network issues, device unavailable) are reported via the optional `writeErrorCallback`
+- **Optimistic updates** are applied immediately to local parameter values for responsive UI
+- Write operations return promises that resolve when the command is queued successfully
+
+```javascript
+const dfair = new DanfossAir({
+    ip: '192.168.1.100',
+    delaySeconds: 30,
+    writeErrorCallback: (error) => {
+        console.error('Network/device error during write:', error.message);
+        // Handle socket-level failures
+    }
+});
+
+try {
+    await dfair.activateBoost(); // Resolves when queued, not when sent
+} catch (error) {
+    console.error('Parameter validation error:', error.message);
+}
 ```
 
 ### Data Parameters
@@ -138,6 +216,7 @@ See the [samples/](./samples/) directory for complete examples:
 - **Basic Usage**: `samples/demoapp_knownipnumber.js`
 - **MQTT Integration**: `samples/demoapp_mqtt.js`
 - **TypeScript Example**: `samples/demoapp_typescript.ts`
+- **Write Operations Demo**: `samples/write-operations-demo.js`
 
 ## MQTT Integration
 

@@ -8,9 +8,12 @@ const DANFOSS_AIR_IP = process.env.DANFOSS_AIR_IP || "10.10.10.167";
 const dfair = new DanfossAir({
     ip: DANFOSS_AIR_IP,
     delaySeconds: 5,
-    debug: false,
+    debug: true,
     callbackFunction: dfairCallback,
-    singleCallbackFunction: dfairSingleCallback
+    singleCallbackFunction: dfairSingleCallback,
+    writeErrorCallback: (err: Error) => {
+        console.error("Write operation error:", err);
+    }
 });
 
 dfair.start();

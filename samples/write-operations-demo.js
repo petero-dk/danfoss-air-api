@@ -28,6 +28,10 @@ async function demonstrateWriteOperations() {
             if (fanStep) {
                 console.log(`  Fan step: ${fanStep.value}`);
             }
+        },
+        writeErrorCallback: (error) => {
+            console.error('❌ Write operation failed:', error.message);
+            console.log('   This callback is called when socket-level write operations fail');
         }
     });
 

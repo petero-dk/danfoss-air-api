@@ -40,6 +40,11 @@ export type CallbackFunction = (data: ParamData[]) => void;
 export type SingleCallbackFunction = (data: ParamData) => void;
 
 /**
+ * Callback function type for handling write operation errors
+ */
+export type WriteErrorCallbackFunction = (error: Error) => void;
+
+/**
  * Options for initializing the Danfoss Air connection
  */
 export interface DanfossAirOptions {
@@ -48,6 +53,7 @@ export interface DanfossAirOptions {
   debug?: boolean;
   callbackFunction?: CallbackFunction;
   singleCallbackFunction?: SingleCallbackFunction;
+  writeErrorCallback?: WriteErrorCallbackFunction;
 }
 
 /**
@@ -59,6 +65,7 @@ export class DanfossAir {
   private debug: boolean;
   private callbackFunction?: CallbackFunction;
   private singleCallbackFunction?: SingleCallbackFunction;
+  private writeErrorCallback?: WriteErrorCallbackFunction;
   private dataParams: DanfossParam[];
   private timeout: NodeJS.Timeout | null = null;
   private socket: net.Socket | null = null;
@@ -71,13 +78,13 @@ export class DanfossAir {
   private cycle: number;
   private step: number;
   private writeBuffer: Buffer[] = [];
-  private pendingWritePromises: Array<{resolve: () => void, reject: (err: Error) => void}> = [];
 
   constructor(options: DanfossAirOptions) {
     this.ip = options.ip;
     this.debug = options.debug || false;
     this.callbackFunction = options.callbackFunction;
     this.singleCallbackFunction = options.singleCallbackFunction;
+    this.writeErrorCallback = options.writeErrorCallback;
     this.dataParams = this.initDataParams();
 
     // Find common cycle for all intervals
@@ -319,10 +326,15 @@ export class DanfossAir {
     }
 
     return new Promise<void>((resolve, reject) => {
-      this.queueWriteOperation(param, value, resolve, reject);
-      // Update local value immediately for optimistic updates
-      param.value = value;
-      param.valuetimestamp = Date.now();
+      try {
+        this.queueWriteOperation(param, value);
+        // Update local value immediately for optimistic updates
+        param.value = value;
+        param.valuetimestamp = Date.now();
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
     });
   }
 
@@ -353,58 +365,53 @@ export class DanfossAir {
   /**
    * Queue a write operation to be sent during the next refresh cycle
    */
-  private queueWriteOperation(param: DanfossParam, value: number | boolean, resolve: () => void, reject: (err: Error) => void): void {
-    try {
-      // Build write frame
-      const buffer = Buffer.alloc(63, 0);
-      buffer[0] = param.endpoint;
-      buffer[1] = 6; // write operation
-      buffer.writeUint16BE(param.address, 2);
+  private queueWriteOperation(param: DanfossParam, value: number | boolean): void {
+    // Build write frame
+    const buffer = Buffer.alloc(63, 0);
+    buffer[0] = param.endpoint;
+    buffer[1] = 6; // write operation
+    buffer.writeUint16BE(param.address, 2);
 
-      // Encode value based on parameter datatype
-      let writeValue = value;
-      if (typeof value === 'number' && param.scale !== 1) {
-        // Reverse the scaling for writing
-        writeValue = Math.round(value / param.scale);
-      }
-
-      // Write the value according to datatype
-      switch (param.datatype) {
-        case 'bool':
-          buffer[4] = typeof value === 'boolean' ? (value ? 1 : 0) : (value ? 1 : 0);
-          break;
-        case 'byte':
-          if (typeof writeValue === 'number') {
-            buffer[4] = writeValue & 0xFF;
-          } else {
-            throw new Error('Byte parameter requires numeric value');
-          }
-          break;
-        case 'ushort':
-          if (typeof writeValue === 'number') {
-            buffer.writeUint16BE(writeValue & 0xFFFF, 4);
-          } else {
-            throw new Error('UShort parameter requires numeric value');
-          }
-          break;
-        case 'uint':
-          if (typeof writeValue === 'number') {
-            buffer.writeUint32BE(writeValue >>> 0, 4);
-          } else {
-            throw new Error('UInt parameter requires numeric value');
-          }
-          break;
-        default:
-          throw new Error(`Write operation not supported for datatype: ${param.datatype}`);
-      }
-
-      this.writeBuffer.push(buffer);
-      this.pendingWritePromises.push({ resolve, reject });
-      
-      this.log(`Queued write operation for ${param.name} with value ${value}`);
-    } catch (error) {
-      reject(error as Error);
+    // Encode value based on parameter datatype
+    let writeValue = value;
+    if (typeof value === 'number' && param.scale !== 1) {
+      // Reverse the scaling for writing
+      writeValue = Math.round(value / param.scale);
     }
+
+    // Write the value according to datatype
+    switch (param.datatype) {
+      case 'bool':
+        buffer[4] = typeof value === 'boolean' ? (value ? 1 : 0) : (value ? 1 : 0);
+        break;
+      case 'byte':
+        if (typeof writeValue === 'number') {
+          buffer[4] = writeValue & 0xFF;
+        } else {
+          throw new Error('Byte parameter requires numeric value');
+        }
+        break;
+      case 'ushort':
+        if (typeof writeValue === 'number') {
+          buffer.writeUint16BE(writeValue & 0xFFFF, 4);
+        } else {
+          throw new Error('UShort parameter requires numeric value');
+        }
+        break;
+      case 'uint':
+        if (typeof writeValue === 'number') {
+          buffer.writeUint32BE(writeValue >>> 0, 4);
+        } else {
+          throw new Error('UInt parameter requires numeric value');
+        }
+        break;
+      default:
+        throw new Error(`Write operation not supported for datatype: ${param.datatype}`);
+    }
+
+    this.writeBuffer.push(buffer);
+    
+    this.log(`Queued write operation for ${param.name} with value ${value}`);
   }
 
   /**
@@ -426,19 +433,17 @@ export class DanfossAir {
         await this.sleep(100); // Small delay between write operations
       }
       
-      // Resolve all pending write promises
-      for (const promise of this.pendingWritePromises) {
-        promise.resolve();
-      }
+      this.log('Write buffer flushed successfully');
     } catch (error) {
-      // Reject all pending write promises
-      for (const promise of this.pendingWritePromises) {
-        promise.reject(error as Error);
+      // Use error callback to report write failures
+      if (this.writeErrorCallback) {
+        this.writeErrorCallback(error as Error);
+      } else {
+        this.log(`Write operation failed: ${error}`);
       }
     } finally {
-      // Clear buffers
+      // Clear buffer
       this.writeBuffer = [];
-      this.pendingWritePromises = [];
     }
   }
 

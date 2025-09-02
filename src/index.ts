@@ -338,6 +338,17 @@ export class DanfossAir {
     });
   }
 
+
+  /**
+   * Convenience method to set operation mode
+   */
+  public async setMode(mode: number): Promise<void> {
+    if (mode < 0 || mode > 2) {
+      throw new Error('Operation mode must be between 0 and 2');
+    }
+    await this.writeParameterValue('operation_mode', mode);
+  }
+
   /**
    * Convenience method to activate boost mode
    */

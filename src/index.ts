@@ -285,11 +285,11 @@ export class DanfossAir {
     );
 
     params.push(
-      this.buildParam('operation_mode', 'Operation Mode', '', 1, 0x1412, 'byte', 1, '', 60)
+      this.buildParam('operation_mode', 'Operation Mode', '', 1, 0x1412, 'byte', 1, '')
     );
 
     params.push(
-      this.buildParam('fan_step', 'Fan Step', '', 1, 0x1561, 'byte', 1, '', 30)
+      this.buildParam('fan_step', 'Fan Step', '', 1, 0x1561, 'byte', 1, '')
     );
 
     params.push(

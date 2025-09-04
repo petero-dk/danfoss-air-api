@@ -15,12 +15,13 @@ async function demonstrateWriteOperations() {
     // Initialize the Danfoss Air connection
     const dfair = new DanfossAir({
         ip: process.env.DANFOSS_AIR_IP || '192.168.1.100',  // Replace with your device IP
-        delaySeconds: 30,
-        debug: true,
+        delaySeconds: 3,
+        debug: false,
         callbackFunction: (data) => {
             console.log('Received updated data after write operations:');
-            const boost = data.find(param => param.name === 'Boost');
+            const boost = data.find(param => param.id === 'Boost');
             const fanStep = data.find(param => param.name === 'Fan Step');
+            const mode = data.find(param => param.id === 'operation_mode');
 
             if (boost) {
                 console.log(`  Boost mode: ${boost.value ? 'ACTIVE' : 'INACTIVE'}`);
@@ -28,9 +29,12 @@ async function demonstrateWriteOperations() {
             if (fanStep) {
                 console.log(`  Fan step: ${fanStep.value}`);
             }
+            if (mode) {
+                console.log(`  Operation mode: ${mode.value}`);
+            }
         },
         writeErrorCallback: (error) => {
-            console.error('❌ Write operation failed:', error.message);
+            console.error('❌ Write operation failed:', error);
             console.log('   This callback is called when socket-level write operations fail');
         }
     });
@@ -38,43 +42,59 @@ async function demonstrateWriteOperations() {
 
     try {
         console.log('=== Danfoss Air Write Operations Demo ===\n');
+        const fanModeParam = dfair.getParameter('operation_mode');
+        console.log(`   Fan mode parameter: ${fanModeParam?.value} (last updated: ${new Date(fanModeParam?.valuetimestamp || 0).toLocaleTimeString()})`);
 
-        // Example 1: Activate boost mode
-        console.log('1. Activating boost mode...');
-        //await dfair.activateBoost();
-        console.log('   ✓ Boost mode activated\n');
+        console.log('1. Activating manual mode...');
+        await dfair.setMode(2);
+        console.log(`   Fan mode parameter: ${fanModeParam?.value} (last updated: ${new Date(fanModeParam?.valuetimestamp || 0).toLocaleTimeString()})`);
+
+
+        console.log('   ✓ Manual mode activated\n');
 
         // Wait a moment
-        //await sleep(20000);
+        await sleep(5000);
+        console.log(`   Fan mode parameter: ${fanModeParam?.value} (last updated: ${new Date(fanModeParam?.valuetimestamp || 0).toLocaleTimeString()})`);
 
-        /*
+        
         // Example 2: Set fan step to 5
         console.log('2. Setting fan step to 5...');
         await dfair.setFanStep(5);
         console.log('   ✓ Fan step set to 5\n');
         
         // Wait a moment
-        await sleep(2000);
-        */
-        // Example 3: Deactivate boost mode
-        console.log('3. Deactivating boost mode...');
-        await dfair.deactivateBoost();
-        console.log('   ✓ Boost mode deactivated\n');
-        /*
-        // Example 4: Using the generic write method
-        console.log('4. Using generic writeParameterValue method...');
-        await dfair.writeParameterValue('fan_step', 3);
-        console.log('   ✓ Fan step set to 3 using generic method\n');
+        await sleep(10000);
+
+        // Example 2: Set fan step to 2
+        console.log('2. Setting fan step to 2...');
+        await dfair.setFanStep(2);
+        console.log('   ✓ Fan step set to 2\n');
         
+        // Wait a moment
+        await sleep(10000);
+        console.log(`   Fan mode parameter: ${fanModeParam?.value} (last updated: ${new Date(fanModeParam?.valuetimestamp || 0).toLocaleTimeString()})`);
+
+        // Example 3: Deactivate manual mode
+        console.log('3. Deactivating manual mode...');
+        await dfair.setMode(0);
+        console.log(`   Fan mode parameter: ${fanModeParam?.value} (last updated: ${new Date(fanModeParam?.valuetimestamp || 0).toLocaleTimeString()})`);
+
+        console.log('   ✓ Manual mode deactivated\n');
+
+        await sleep(6000);
+
+        console.log(`   Fan mode parameter: ${fanModeParam?.value} (last updated: ${new Date(fanModeParam?.valuetimestamp || 0).toLocaleTimeString()})`);
+
+
         // Example 5: Check parameter status
         console.log('5. Checking current parameter values...');
-        */
-        await sleep(6000);
         const boostParam = dfair.getParameter('boost');
         const fanParam = dfair.getParameter('fan_step');
+        
         await sleep(20000);
         console.log(`   Boost parameter: ${boostParam?.value} (last updated: ${new Date(boostParam?.valuetimestamp || 0).toLocaleTimeString()})`);
         console.log(`   Fan step parameter: ${fanParam?.value} (last updated: ${new Date(fanParam?.valuetimestamp || 0).toLocaleTimeString()})`);
+        console.log(`   Fan mode parameter: ${fanModeParam?.value} (last updated: ${new Date(fanModeParam?.valuetimestamp || 0).toLocaleTimeString()})`);
 
         console.log('\n=== Write Operations Demo Complete ===');
 
@@ -90,7 +110,7 @@ async function demonstrateWriteOperations() {
         }
     } finally {
         // Clean up
-        dfair.cleanup();
+        //dfair.cleanup();
     }
 }
 
@@ -130,6 +150,7 @@ function sleep(ms) {
 
 // Handle the SIGINT signal (Ctrl+C)
 process.on('SIGINT', () => {
+    dfair.cleanup();
     console.log("\nExiting the application. Goodbye!");
     process.exit(0); // Exit gracefully
 });

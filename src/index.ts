@@ -117,7 +117,7 @@ export class DanfossAir {
       this.socket = new net.Socket();
 
       this.socket.on('data', (payload: Buffer) => {
-        this.log(`Data received: ${payload} size: ${payload.length}`);
+        this.log(`Data received: ${payload.toString("hex")} size: ${payload.length}`);
         this.processIncomingData(payload);
       });
 
@@ -285,11 +285,11 @@ export class DanfossAir {
     );
 
     params.push(
-      this.buildParam('operation_mode', 'Operation Mode', '', 1, 0x1412, 'byte', 1, '')
+      this.buildParam('operation_mode', 'Operation Mode', '', 1, 0x1412, 'byte', 1, '', 60)
     );
 
     params.push(
-      this.buildParam('fan_step', 'Fan Step', '', 1, 0x1561, 'byte', 1, '')
+      this.buildParam('fan_step', 'Fan Step', '', 1, 0x1561, 'byte', 1, '', 30)
     );
 
     params.push(
@@ -363,6 +363,7 @@ export class DanfossAir {
       try {
         this.queueWriteOperation(param, value);
         // Update local value immediately for optimistic updates
+        console.log(`Optimistically updating ${param.name} to ${value}`);
         param.value = value;
         param.valuetimestamp = Date.now();
         resolve();
@@ -474,8 +475,7 @@ export class DanfossAir {
         if (!this.socket) {
           throw new Error('Socket not initialized');
         }
-        this.socket.write(new Uint8Array(buffer));
-        await this.sleep(100); // Small delay between write operations
+        await this.operationWriteValue(buffer);
       }
 
       this.log('Write buffer flushed successfully');
@@ -492,6 +492,31 @@ export class DanfossAir {
     }
   }
 
+  private async operationWriteValue(data: Buffer): Promise<void> {
+    this.activeParam = undefined;
+    this.activePromise = new Promise<void>((resolve, reject) => {
+      this.activePromiseResolve = resolve;
+      this.activePromiseReject = reject;
+    });
+    await new Promise<void>((resolve, reject) => {
+      if (!this.socket || this.socket.closed || this.socket.connecting) {
+        return reject(new Error('Socket not initialized'));
+      }
+
+      this.socket.write(data, (error) => {
+        if (error) {
+          return reject(error);
+        }
+        resolve();
+      });
+    });
+    this.activeTimeout = setTimeout(() => {
+      this.activeOperationTimeout();
+    }, 3000);
+
+    return this.activePromise;
+  }
+
   public debugDumpData(): void {
     this.log('--------------------------------');
     for (const param of this.dataParams) {
@@ -504,7 +529,7 @@ export class DanfossAir {
       this.timeout = setTimeout(() => {
         this.refreshData();
         if (this.debug) {
-          this.debugDumpData();
+          //this.debugDumpData();
         }
 
         if (this.callbackFunction) {
@@ -545,7 +570,6 @@ export class DanfossAir {
     const timestampBegin = Date.now();
 
     for (const param of this.dataParams) {
-      this.log(`*** DEBUG: ${param.name} ${param.value} ${param.interval}`);
       if (param.value !== -1111 && param.interval === 0) {
         this.log(`Skipping because static: ${param.name}`);
         continue;
@@ -555,9 +579,6 @@ export class DanfossAir {
         continue;
       }
 
-      if (this.debug) {
-        this.log(`Start read of param: ${param.name}`);
-      }
       await this.operationReadValue(param);
       await this.sleep(100);
       this.log(`processed parameter: ${param.name}`);
@@ -581,7 +602,8 @@ export class DanfossAir {
 
   private log(message: string): void {
     if (this.debug) {
-      console.log(message);
+      const now = new Date();
+      console.log(`${now.toLocaleTimeString()} : ${message}`);
     }
   }
 
@@ -596,6 +618,7 @@ export class DanfossAir {
     if (this.activePromiseReject) {
       this.activePromiseReject();
     }
+    this.activeParam = undefined;
   }
 
   private async operationReadValue(param: DanfossParam): Promise<void> {
@@ -625,48 +648,46 @@ export class DanfossAir {
   }
 
   private processIncomingData(payload: Buffer): void {
-    if (!this.activeParam) {
-      return;
-    }
+    if (this.activeParam) {
+      let responseValue: number | boolean;
 
-    let responseValue: number | boolean;
-
-    // Determine if the data is for the current packet
-    switch (this.activeParam.datatype) {
-      case 'byte':
-        responseValue = payload[0];
-        break;
-      case 'bool':
-        responseValue = payload[0] === 1;
-        break;
-      case 'ushort':
-        responseValue = payload.readUInt16BE();
-        break;
-      case 'uint':
-        responseValue = payload.readUInt32BE();
-        break;
-      case 'string':
-        throw new Error('string datatype not handled properly TODO');
-      default:
-        throw new Error(`unhandled datatype: ${this.activeParam.datatype}`);
-    }
-
-    // For read operations, update the parameter value with scaling and precision
-    if (typeof responseValue === 'number') {
-      responseValue *= this.activeParam.scale;
-
-      if (this.activeParam.precision !== '') {
-        responseValue = round(
-          responseValue,
-          Number(this.activeParam.precision)
-        );
+      // Determine if the data is for the current packet
+      switch (this.activeParam.datatype) {
+        case 'byte':
+          responseValue = payload[0];
+          break;
+        case 'bool':
+          responseValue = payload[0] === 1;
+          break;
+        case 'ushort':
+          responseValue = payload.readUInt16BE();
+          break;
+        case 'uint':
+          responseValue = payload.readUInt32BE();
+          break;
+        case 'string':
+          throw new Error('string datatype not handled properly TODO');
+        default:
+          throw new Error(`unhandled datatype: ${this.activeParam.datatype}`);
       }
+
+      // For read operations, update the parameter value with scaling and precision
+      if (typeof responseValue === 'number') {
+        responseValue *= this.activeParam.scale;
+
+        if (this.activeParam.precision !== '') {
+          responseValue = round(
+            responseValue,
+            Number(this.activeParam.precision)
+          );
+        }
+      }
+
+      // Update the parameter value and timestamp
+      this.activeParam.value = responseValue;
+      this.activeParam.valuetimestamp = Date.now();
+      this.activeParam = undefined;
     }
-
-    // Update the parameter value and timestamp
-    this.activeParam.value = responseValue;
-    this.activeParam.valuetimestamp = Date.now();
-
     // Clear timeout
     if (this.activeTimeout) {
       clearTimeout(this.activeTimeout);

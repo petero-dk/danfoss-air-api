@@ -363,7 +363,7 @@ export class DanfossAir {
       try {
         this.queueWriteOperation(param, value);
         // Update local value immediately for optimistic updates
-        console.log(`Optimistically updating ${param.name} to ${value}`);
+        this.log(`Optimistically updating ${param.name} to ${value}`);
         param.value = value;
         param.valuetimestamp = Date.now();
         resolve();

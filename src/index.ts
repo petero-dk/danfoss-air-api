@@ -136,11 +136,23 @@ export class DanfossAir {
       });
 
       this.socket.on('error', (err: Error) => {
+        this.log(`Error: ${err}`);
+
+        if (this.socket) {
+          this.socket.destroy();
+        }
+        this.activeParam = undefined;
+        this.activePromise = undefined;
+        this.activePromiseResolve = undefined;
+        this.activePromiseReject = undefined;
+
+        clearTimeout(this.activeTimeout);
+        clearTimeout(connectionTimeout);
+        this.activeTimeout = undefined;
+
         if (!resolved) {
           reject(err);
         }
-        this.log(`Error: ${err}`);
-        this.cleanup();
       });
 
 

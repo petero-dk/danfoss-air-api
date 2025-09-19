@@ -11,7 +11,7 @@ const dfair = new DanfossAir({
     debug: true,
     callbackFunction: dfairCallback,
     singleCallbackFunction: dfairSingleCallback,
-    writeErrorCallback: (err: Error) => {
+    errorCallback: (err: Error) => {
         console.error("Write operation error:", err);
     }
 });

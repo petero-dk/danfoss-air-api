@@ -33,7 +33,7 @@ async function demonstrateWriteOperations() {
                 console.log(`  Operation mode: ${mode.value}`);
             }
         },
-        writeErrorCallback: (error) => {
+        errorCallback: (error) => {
             console.error('❌ Write operation failed:', error);
             console.log('   This callback is called when socket-level write operations fail');
         }

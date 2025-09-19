@@ -42,7 +42,7 @@ export type SingleCallbackFunction = (data: ParamData) => void;
 /**
  * Callback function type for handling write operation errors
  */
-export type WriteErrorCallbackFunction = (error: Error) => void;
+export type ErrorCallbackFunction = (error: Error, type: 'write' | 'connection') => void;
 
 /**
  * Options for initializing the Danfoss Air connection
@@ -51,9 +51,10 @@ export interface DanfossAirOptions {
   ip: string;
   delaySeconds: number;
   debug?: boolean;
+  continueOnError?: boolean;
   callbackFunction?: CallbackFunction;
   singleCallbackFunction?: SingleCallbackFunction;
-  writeErrorCallback?: WriteErrorCallbackFunction;
+  errorCallback?: ErrorCallbackFunction;
 }
 
 /**
@@ -65,7 +66,7 @@ export class DanfossAir {
   private debug: boolean;
   private callbackFunction?: CallbackFunction;
   private singleCallbackFunction?: SingleCallbackFunction;
-  private writeErrorCallback?: WriteErrorCallbackFunction;
+  private errorCallback?: ErrorCallbackFunction;
   private dataParams: DanfossParam[];
   private timeout: NodeJS.Timeout | null = null;
   private socket: net.Socket | null = null;
@@ -74,6 +75,7 @@ export class DanfossAir {
   private activePromiseResolve?: () => void;
   private activePromiseReject?: () => void;
   private activeTimeout?: NodeJS.Timeout;
+  private continueOnError: boolean = false;
 
   private cycle: number;
   private step: number;
@@ -84,8 +86,9 @@ export class DanfossAir {
     this.debug = options.debug || false;
     this.callbackFunction = options.callbackFunction;
     this.singleCallbackFunction = options.singleCallbackFunction;
-    this.writeErrorCallback = options.writeErrorCallback;
+    this.errorCallback = options.errorCallback;
     this.dataParams = this.initDataParams();
+    this.continueOnError = options.continueOnError || false;
 
     // Find common cycle for all intervals
     const intervals = this.dataParams.filter(param => (param.interval || options.delaySeconds) > 0).map(param => param.interval || options.delaySeconds as number);
@@ -493,8 +496,8 @@ export class DanfossAir {
       this.log('Write buffer flushed successfully');
     } catch (error) {
       // Use error callback to report write failures
-      if (this.writeErrorCallback) {
-        this.writeErrorCallback(error as Error);
+      if (this.errorCallback) {
+        this.errorCallback(error as Error, 'write');
       } else {
         this.log(`Write operation failed: ${error}`);
       }
@@ -539,7 +542,6 @@ export class DanfossAir {
   private refreshData(): void {
     this.refreshDataAsync().then(() => {
       this.timeout = setTimeout(() => {
-        this.refreshData();
         if (this.debug) {
           //this.debugDumpData();
         }
@@ -557,9 +559,18 @@ export class DanfossAir {
           }
 
           this.callbackFunction(data);
+          
+          if (!this.continueOnError) {
+            this.refreshData();
+          }
         }
       }, this.delaySeconds * 1000);
-    }).catch((err) => this.writeErrorCallback && this.writeErrorCallback(err));
+    }).catch((err) => this.errorCallback && this.errorCallback(err, 'connection'))
+      .finally(() => {
+        if (this.continueOnError) {
+          this.refreshData();
+        }
+      });
   }
 
   private currentStep: number = 0;

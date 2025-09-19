@@ -101,7 +101,7 @@ const dfair = new DanfossAir({
     singleCallbackFunction: (data: ParamData) => {
         console.log('Single param:', data);
     },
-    writeErrorCallback: (error: Error) => {
+    errorCallback: (error: Error) => {
         console.error('Write operation failed:', error.message);
         // Handle write failures (e.g., network issues, device errors)
     }
@@ -161,7 +161,7 @@ dfair.cleanup();
 Write operations use a buffered approach where commands are queued and sent during the refresh cycle. Error handling works as follows:
 
 - **Parameter validation errors** (invalid parameter, not writable, etc.) are thrown immediately as promise rejections
-- **Socket-level write errors** (network issues, device unavailable) are reported via the optional `writeErrorCallback`
+- **Socket-level write errors** (network issues, device unavailable) are reported via the optional `errorCallback`
 - **Optimistic updates** are applied immediately to local parameter values for responsive UI
 - Write operations return promises that resolve when the command is queued successfully
 
@@ -169,7 +169,7 @@ Write operations use a buffered approach where commands are queued and sent duri
 const dfair = new DanfossAir({
     ip: '192.168.1.100',
     delaySeconds: 30,
-    writeErrorCallback: (error) => {
+    errorCallback: (error) => {
         console.error('Network/device error during write:', error.message);
         // Handle socket-level failures
     }

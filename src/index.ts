@@ -80,6 +80,8 @@ export class DanfossAir {
   private cycle: number;
   private step: number;
   private writeBuffer: Buffer[] = [];
+  private isConnected: boolean = false;
+  private isConnecting: boolean = false;
 
   constructor(options: DanfossAirOptions) {
     this.ip = options.ip;
@@ -89,6 +91,9 @@ export class DanfossAir {
     this.errorCallback = options.errorCallback;
     this.dataParams = this.initDataParams();
     this.continueOnError = options.continueOnError || false;
+
+    this.socket = new net.Socket();
+    this.setupSocketEventHandlers();
 
     // Find common cycle for all intervals
     const intervals = this.dataParams.filter(param => (param.interval || options.delaySeconds) > 0).map(param => param.interval || options.delaySeconds as number);
@@ -115,69 +120,89 @@ export class DanfossAir {
     return (a * b) / this.gcd(a, b);
   }
 
-  private async setupSocket(): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      this.socket = new net.Socket();
+  private setupSocketEventHandlers(): void {
+    if (!this.socket) return;
 
-      this.socket.on('data', (payload: Buffer) => {
-        this.log(`Data received: ${payload.toString("hex")} size: ${payload.length}`);
-        this.processIncomingData(payload);
-      });
+    this.socket.on('data', (payload: Buffer) => {
+      this.log(`Data received: ${payload.toString("hex")} size: ${payload.length}`);
+      this.processIncomingData(payload);
+    });
 
-      const connectionTimeout = setTimeout(() => reject(new Error('Connection timed out')), 5000);
-      let resolved = false;
+    this.socket.on('connect', () => {
+      this.log('Connected');
+      this.isConnected = true;
+      this.isConnecting = false;
+    });
 
-      this.socket.on('connect', () => {
-        this.log('Connected');
+    this.socket.on('end', () => {
+      this.log('Socket ended');
+      this.isConnected = false;
+      this.isConnecting = false;
+    });
+
+    this.socket.on('close', () => {
+      this.log('Socket closed');
+      this.isConnected = false;
+      this.isConnecting = false;
+    });
+
+    this.socket.on('error', (err: Error) => {
+      this.log(`Socket error: ${err}`);
+      this.isConnected = false;
+      this.isConnecting = false;
+      
+      if (this.errorCallback) {
+        this.errorCallback(err, 'connection');
+      }
+    });
+  }
+
+  private async ensureConnected(): Promise<void> {
+    if (this.isConnected || this.isConnecting) {
+      return;
+    }
+
+    this.isConnecting = true;
+
+    return new Promise<void>((resolve, reject) => {
+      if (!this.socket) {
+        this.isConnecting = false;
+        return reject(new Error('Socket not initialized'));
+      }
+
+      const connectionTimeout = setTimeout(() => {
+        this.isConnecting = false;
+        reject(new Error('Connection timed out'));
+      }, 5000);
+
+      const onConnect = () => {
         clearTimeout(connectionTimeout);
-        resolved = true;
+        this.socket?.removeListener('error', onError);
         resolve();
-      });
+      };
 
-      this.socket.on('end', (e: any) => {
-        this.log(`end: ${e}`);
-      });
-
-      this.socket.on('error', (err: Error) => {
-        this.log(`Error: ${err}`);
-
-        if (this.socket) {
-          this.socket.destroy();
-        }
-        this.activeParam = undefined;
-        this.activePromise = undefined;
-        this.activePromiseResolve = undefined;
-        this.activePromiseReject = undefined;
-
-        clearTimeout(this.activeTimeout);
+      const onError = (err: Error) => {
         clearTimeout(connectionTimeout);
-        this.activeTimeout = undefined;
+        this.socket?.removeListener('connect', onConnect);
+        this.isConnecting = false;
+        reject(err);
+      };
 
-        if (!resolved) {
-          reject(err);
-        }
-      });
-
+      this.socket.once('connect', onConnect);
+      this.socket.once('error', onError);
 
       this.socket.connect({ host: this.ip, port: 30046 });
     });
-
   }
 
   public async start(): Promise<void> {
-    await this.setupSocket();
-
+    await this.ensureConnected();
     await this.sanityCheck();
 
-    if (this.socket && !this.socket.closed && !this.socket.connecting) {
-      this.log(`Socket connected ${this.socket.remoteAddress}:${this.socket.remotePort} = ${this.socket?.closed} ${this.socket?.connecting}`);
-      this.socket.destroy();
-      this.timeout = setTimeout(() => {
-        this.refreshData();
-      }, 500);
-    } else {
-      this.log('Socket not connected');
-    }
+    this.log('Starting refresh cycle');
+    this.timeout = setTimeout(() => {
+      this.refreshData();
+    }, 500);
   }
 
   private async sanityCheck(): Promise<void> {
@@ -206,13 +231,19 @@ export class DanfossAir {
   public cleanup(): void {
     if (this.timeout) {
       clearTimeout(this.timeout);
+      this.timeout = null;
     }
     if (this.activeTimeout) {
       clearTimeout(this.activeTimeout);
+      this.activeTimeout = undefined;
     }
     if (this.socket) {
+      this.socket.removeAllListeners();
       this.socket.destroy();
+      this.socket = null;
     }
+    this.isConnected = false;
+    this.isConnecting = false;
   }
 
   private buildParam(
@@ -514,8 +545,8 @@ export class DanfossAir {
       this.activePromiseReject = reject;
     });
     await new Promise<void>((resolve, reject) => {
-      if (!this.socket || this.socket.closed || this.socket.connecting) {
-        return reject(new Error('Socket not initialized'));
+      if (!this.socket || !this.isConnected) {
+        return reject(new Error('Socket not connected'));
       }
 
       this.socket.write(data, (error) => {
@@ -575,11 +606,15 @@ export class DanfossAir {
 
   private currentStep: number = 0;
   private async refreshDataAsync(): Promise<void> {
-    if (this.socket?.connecting) {
+    if (this.isConnecting) {
       this.log('Socket still connecting, skipping this cycle');
       return;
     }
-    await this.setupSocket();
+
+    // Ensure we're connected before proceeding
+    if (!this.isConnected) {
+      await this.ensureConnected();
+    }
 
     // Flush any pending write operations
     await this.flushWriteBuffer();
@@ -615,9 +650,6 @@ export class DanfossAir {
       }
     }
 
-    if (this.socket) {
-      this.socket.destroy();
-    }
     const millis = Date.now() - timestampBegin;
     this.log(`Refresh took: ${millis} milliseconds`);
     this.currentStep += this.delaySeconds;
@@ -658,8 +690,9 @@ export class DanfossAir {
     buffer[1] = 4; // read
     buffer.writeUint16BE(param.address, 2);
 
-    if (!this.socket || this.socket.closed || this.socket.connecting)
-      throw new Error('Socket not initialized');
+    if (!this.socket || !this.isConnected) {
+      throw new Error('Socket not connected');
+    }
 
     this.socket.write(new Uint8Array(buffer));
 

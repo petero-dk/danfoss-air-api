@@ -73,7 +73,7 @@ export class DanfossAir {
   private activeParam?: DanfossParam;
   private activePromise?: Promise<void>;
   private activePromiseResolve?: () => void;
-  private activePromiseReject?: () => void;
+  private activePromiseReject?: (error: Error) => void;
   private activeTimeout?: NodeJS.Timeout;
   private continueOnError: boolean = false;
 
@@ -82,6 +82,7 @@ export class DanfossAir {
   private writeBuffer: Buffer[] = [];
   private isConnected: boolean = false;
   private isConnecting: boolean = false;
+  private disposed: boolean = false;
 
   constructor(options: DanfossAirOptions) {
     this.ip = options.ip;
@@ -229,14 +230,13 @@ export class DanfossAir {
   }
 
   public cleanup(): void {
+    this.disposed = true;
     if (this.timeout) {
       clearTimeout(this.timeout);
       this.timeout = null;
     }
-    if (this.activeTimeout) {
-      clearTimeout(this.activeTimeout);
-      this.activeTimeout = undefined;
-    }
+    // Release any in-flight read/write so a pending await does not hang forever.
+    this.settleActiveOperation(new Error('connection closed'));
     if (this.socket) {
       this.socket.removeAllListeners();
       this.socket.destroy();
@@ -570,36 +570,42 @@ export class DanfossAir {
     }
   }
 
+  private buildSnapshot(): ParamData[] {
+    return this.dataParams.map(param => ({
+      id: param.id,
+      name: param.name,
+      unit: param.unit,
+      value: param.value
+    }));
+  }
+
+  /**
+   * Schedule the next refresh cycle exactly once, after delaySeconds.
+   * Never re-arms once the instance has been cleaned up.
+   */
+  private scheduleNext(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.timeout = setTimeout(() => {
+      this.refreshData();
+    }, this.delaySeconds * 1000);
+  }
+
   private refreshData(): void {
-    this.refreshDataAsync().then(() => {
-      this.timeout = setTimeout(() => {
-        if (this.debug) {
-          //this.debugDumpData();
-        }
-
+    this.refreshDataAsync()
+      .then(() => {
         if (this.callbackFunction) {
-          // Create a clean set of outputs
-          const data: ParamData[] = [];
-          for (const param of this.dataParams) {
-            data.push({
-              id: param.id,
-              name: param.name,
-              unit: param.unit,
-              value: param.value
-            });
-          }
-
-          this.callbackFunction(data);
-          
-          if (!this.continueOnError) {
-            this.refreshData();
-          }
+          this.callbackFunction(this.buildSnapshot());
         }
-      }, this.delaySeconds * 1000);
-    }).catch((err) => this.errorCallback && this.errorCallback(err, 'connection'))
-      .finally(() => {
+        this.scheduleNext();
+      })
+      .catch((err) => {
+        if (this.errorCallback) {
+          this.errorCallback(err, 'connection');
+        }
         if (this.continueOnError) {
-          this.refreshData();
+          this.scheduleNext();
         }
       });
   }
@@ -668,15 +674,44 @@ export class DanfossAir {
     });
   }
 
+  /**
+   * The single place where an in-flight read/write operation is settled.
+   * Tears down the timeout, active parameter and promise handlers before
+   * resolving/rejecting so a late response can never resolve a settled op
+   * and no stale closures are retained.
+   */
+  private settleActiveOperation(error?: Error): void {
+    if (this.activeTimeout) {
+      clearTimeout(this.activeTimeout);
+      this.activeTimeout = undefined;
+    }
+    const resolve = this.activePromiseResolve;
+    const reject = this.activePromiseReject;
+    this.activePromiseResolve = undefined;
+    this.activePromiseReject = undefined;
+    this.activeParam = undefined;
+
+    if (error) {
+      if (reject) {
+        reject(error);
+      }
+    } else if (resolve) {
+      resolve();
+    }
+  }
+
   private activeOperationTimeout(): void {
     this.log('activeOperationTimeout');
-    if (this.activePromiseReject) {
-      this.activePromiseReject();
-    }
-    this.activeParam = undefined;
+    this.settleActiveOperation(new Error('operation timed out'));
   }
 
   private async operationReadValue(param: DanfossParam): Promise<void> {
+    // Validate the socket before assigning any active-operation state so the
+    // early failure path leaves nothing dangling.
+    if (!this.socket || !this.isConnected) {
+      throw new Error('Socket not connected');
+    }
+
     this.activeParam = param;
 
     this.activePromise = new Promise<void>((resolve, reject) => {
@@ -690,11 +725,12 @@ export class DanfossAir {
     buffer[1] = 4; // read
     buffer.writeUint16BE(param.address, 2);
 
-    if (!this.socket || !this.isConnected) {
-      throw new Error('Socket not connected');
-    }
-
-    this.socket.write(new Uint8Array(buffer));
+    this.socket.write(new Uint8Array(buffer), (error) => {
+      if (error) {
+        // Surface send failures instead of waiting for the 3s timeout.
+        this.settleActiveOperation(error);
+      }
+    });
 
     this.activeTimeout = setTimeout(() => {
       this.activeOperationTimeout();
@@ -704,55 +740,67 @@ export class DanfossAir {
   }
 
   private processIncomingData(payload: Buffer): void {
-    if (this.activeParam) {
+    // An operation is in flight only while its promise is unsettled. Without
+    // one, ignore stray/late/duplicate frames so they can't resolve a settled
+    // op or be applied to the wrong parameter.
+    if (!this.activePromiseResolve && !this.activePromiseReject) {
+      this.log('Received data with no active operation, ignoring');
+      return;
+    }
+
+    // Reads decode and store a value; writes leave activeParam undefined and
+    // only need the operation settled.
+    const param = this.activeParam;
+    if (param) {
       let responseValue: number | boolean;
 
-      // Determine if the data is for the current packet
-      switch (this.activeParam.datatype) {
-        case 'byte':
-          responseValue = payload[0];
-          break;
-        case 'bool':
-          responseValue = payload[0] === 1;
-          break;
-        case 'ushort':
-          responseValue = payload.readUInt16BE();
-          break;
-        case 'uint':
-          responseValue = payload.readUInt32BE();
-          break;
-        case 'string':
-          throw new Error('string datatype not handled properly TODO');
-        default:
-          throw new Error(`unhandled datatype: ${this.activeParam.datatype}`);
+      try {
+        switch (param.datatype) {
+          case 'byte':
+            if (payload.length < 1) {
+              throw new Error('Payload too short for byte');
+            }
+            responseValue = payload[0];
+            break;
+          case 'bool':
+            if (payload.length < 1) {
+              throw new Error('Payload too short for bool');
+            }
+            responseValue = payload[0] === 1;
+            break;
+          case 'ushort':
+            responseValue = payload.readUInt16BE();
+            break;
+          case 'uint':
+            responseValue = payload.readUInt32BE();
+            break;
+          case 'string':
+            throw new Error('string datatype not handled properly TODO');
+          default:
+            throw new Error(`unhandled datatype: ${param.datatype}`);
+        }
+      } catch (error) {
+        this.settleActiveOperation(error as Error);
+        return;
       }
 
-      // For read operations, update the parameter value with scaling and precision
+      // Update the parameter value with scaling and precision
       if (typeof responseValue === 'number') {
-        responseValue *= this.activeParam.scale;
+        responseValue *= param.scale;
 
-        if (this.activeParam.precision !== '') {
+        if (param.precision !== '') {
           responseValue = round(
             responseValue,
-            Number(this.activeParam.precision)
+            Number(param.precision)
           );
         }
       }
 
-      // Update the parameter value and timestamp
-      this.activeParam.value = responseValue;
-      this.activeParam.valuetimestamp = Date.now();
-      this.activeParam = undefined;
-    }
-    // Clear timeout
-    if (this.activeTimeout) {
-      clearTimeout(this.activeTimeout);
-      this.activeTimeout = undefined;
+      param.value = responseValue;
+      param.valuetimestamp = Date.now();
     }
 
-    if (this.activePromiseResolve) {
-      this.activePromiseResolve();
-    }
+    this.settleActiveOperation();
   }
 }
 
